@@ -4,34 +4,53 @@ import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:8000';
 
+/* ── 토스트 알림 ────────────────────────────────────────────────── */
+function Toast({ message, onClose }) {
+  return (
+    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 flex items-center space-x-3 bg-red-600 text-white px-5 py-3 rounded-xl shadow-xl animate-bounce-once">
+      <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+      </svg>
+      <span className="text-sm font-medium">{message}</span>
+      <button onClick={onClose} className="text-white/70 hover:text-white ml-1">✕</button>
+    </div>
+  );
+}
+
 export default function InterviewSetup() {
   const navigate = useNavigate();
-  const [userId, setUserId] = useState(2);
-  const [jobId, setJobId] = useState(1);
+  const [userId, setUserId]   = useState(2);
+  const [jobId, setJobId]     = useState(1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [toast, setToast]     = useState('');
 
-  const handleStartInterview = async (e) => {
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 4000);
+  };
+
+  const handleStart = async (e) => {
     e.preventDefault();
-    setError('');
+    setToast('');
     setLoading(true);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/interview/start`, {
-        user_id: parseInt(userId),
-        job_id: parseInt(jobId)
-      });
-
-      const { session_id } = response.data;
-      
-      // Navigate to chat room
-      navigate(`/interview/${session_id}`);
-    } catch (err) {
-      console.error('Error starting interview:', err);
-      setError(
-        err.response?.data?.detail || 
-        'Failed to start interview. Please check if the backend is running.'
+      const { data } = await axios.post(
+        `${API_BASE_URL}/api/interview/start`,
+        { user_id: parseInt(userId), job_id: parseInt(jobId) },
+        { timeout: 8000 }
       );
+      navigate(`/interview/${data.session_id}`);
+    } catch (err) {
+      if (!err.response) {
+        // 네트워크 / 서버 오프라인
+        showToast('서버에 연결할 수 없습니다. 백엔드(http://localhost:8000)가 실행 중인지 확인해 주세요.');
+      } else if (err.response.status === 404) {
+        showToast('사용자 또는 공고를 찾을 수 없습니다. ID를 확인해 주세요.');
+      } else {
+        showToast(err.response?.data?.detail || '면접 시작에 실패했습니다. 다시 시도해 주세요.');
+      }
     } finally {
       setLoading(false);
     }
@@ -39,100 +58,84 @@ export default function InterviewSetup() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+
+      {/* 토스트 */}
+      {toast && <Toast message={toast} onClose={() => setToast('')} />}
+
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
-        {/* Header */}
+
+        {/* 헤더 */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-full mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-full mb-4 shadow-lg">
             <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            AI Interview System
-          </h1>
-          <p className="text-gray-600">
-            Start your personalized AI-powered interview
-          </p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-1">AI Interview</h1>
+          <p className="text-gray-500 text-sm">LangChain · RAG · llama3.1</p>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleStartInterview} className="space-y-6">
-          {/* User ID Input */}
+        {/* 폼 */}
+        <form onSubmit={handleStart} className="space-y-5">
+
+          {/* User ID */}
           <div>
-            <label htmlFor="userId" className="block text-sm font-medium text-gray-700 mb-2">
-              User ID
+            <label htmlFor="userId" className="block text-sm font-medium text-gray-700 mb-1.5">
+              사용자 ID
             </label>
             <input
-              type="number"
-              id="userId"
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder-gray-400"
+              type="number" id="userId" value={userId} min="1" required
+              onChange={e => setUserId(e.target.value)}
+              className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg
+                         focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                         placeholder-gray-400 transition-all"
               placeholder="2"
-              required
-              min="1"
             />
-            <p className="mt-1 text-xs text-gray-500">
-              Enter your candidate ID (default: 2 for Kim Developer)
-            </p>
+            <p className="mt-1 text-xs text-gray-400">기본값: 2 (Kim Developer)</p>
           </div>
 
-          {/* Job ID Input */}
+          {/* Job ID */}
           <div>
-            <label htmlFor="jobId" className="block text-sm font-medium text-gray-700 mb-2">
-              Job ID
+            <label htmlFor="jobId" className="block text-sm font-medium text-gray-700 mb-1.5">
+              공고 ID
             </label>
             <input
-              type="number"
-              id="jobId"
-              value={jobId}
-              onChange={(e) => setJobId(e.target.value)}
-              className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder-gray-400"
+              type="number" id="jobId" value={jobId} min="1" required
+              onChange={e => setJobId(e.target.value)}
+              className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg
+                         focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                         placeholder-gray-400 transition-all"
               placeholder="1"
-              required
-              min="1"
             />
-            <p className="mt-1 text-xs text-gray-500">
-              Enter the job posting ID (default: 1 for Python Backend Developer)
-            </p>
+            <p className="mt-1 text-xs text-gray-400">기본값: 1 (Python Backend Developer)</p>
           </div>
 
-          {/* Error Message */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-              <div className="flex items-start">
-                <svg className="w-5 h-5 mr-2 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                </svg>
-                <span className="text-sm">{error}</span>
-              </div>
-            </div>
-          )}
-
-          {/* Submit Button */}
+          {/* 버튼 */}
           <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-200 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none shadow-lg"
+            type="submit" disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 active:scale-95
+                       text-white font-semibold py-3.5 px-6 rounded-xl
+                       transition-all duration-150 shadow-lg
+                       disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
           >
             {loading ? (
-              <span className="flex items-center justify-center">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <span className="flex items-center justify-center space-x-2">
+                <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
-                Starting Interview...
+                <span>면접 시작 중...</span>
               </span>
-            ) : (
-              'Start Interview'
-            )}
+            ) : '면접 시작하기'}
           </button>
         </form>
 
-        {/* Footer */}
-        <div className="mt-6 text-center text-xs text-gray-500">
-          <p>Powered by AI • LangChain + RAG</p>
-        </div>
+        {/* 푸터 */}
+        <p className="mt-6 text-center text-xs text-gray-400">
+          Powered by FastAPI · React · pgvector
+        </p>
       </div>
     </div>
   );
