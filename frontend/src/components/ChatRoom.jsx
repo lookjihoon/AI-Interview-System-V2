@@ -196,7 +196,7 @@ export default function ChatRoom() {
       </div>
 
       {/* Chat Messages */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto bg-gray-50">
         <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
           {messages.map((message, index) => (
             <div key={index}>

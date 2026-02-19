@@ -62,7 +62,7 @@ class ChatResponse(BaseModel):
     """Schema for chat response"""
     evaluation: Optional[Dict[str, Any]] = Field(None, description="Evaluation of user's answer")
     next_question: str = Field(..., description="Next interview question")
-    question_id: int = Field(..., description="ID of the question")
+    question_id: Optional[int] = Field(None, description="ID of the question (None for self-intro)")
     category: str = Field(..., description="Question category")
 
 
@@ -125,7 +125,11 @@ async def start_interview(
     db.refresh(session)
     
     # Add initial greeting to transcript
-    greeting = f"Hello {user.name}! Welcome to your interview for the {job.title} position. I'm your AI interviewer today. Let's begin with your first question."
+    greeting = (
+        f"안녕하세요, {user.name}님! "
+        f"{job.title} 직무 면접에 오신 것을 환영합니다. "
+        f"저는 AI 면접관입니다. 편안한 마음으로 면접에 임해주세요."
+    )
     
     greeting_transcript = Transcript(
         session_id=session.id,
@@ -222,7 +226,8 @@ async def chat(
         user_id=session.user_id,
         job_id=session.job_posting_id,
         history_ids=history_ids,
-        db=db
+        db=db,
+        session_id=session.id   # needed for transcript-based self-intro check
     )
     
     if not next_question_obj:

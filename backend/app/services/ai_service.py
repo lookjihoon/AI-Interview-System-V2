@@ -27,8 +27,9 @@ class InterviewAI:
         # Initialize Ollama LLM
         self.llm = ChatOllama(
             model="llama3.1",
-            temperature=0.7,
-            num_predict=512
+            temperature=0.1,   # Low temperature = more deterministic, less hallucination
+            num_predict=768,
+            format="json"      # Force JSON output to prevent wrappers
         )
         
         # Initialize embedding model (same as used for question bank)
@@ -43,20 +44,34 @@ class InterviewAI:
         user_id: int,
         job_id: int,
         history_ids: List[int],
-        db: Session
+        db: Session,
+        session_id: int = None
     ) -> Optional[QuestionBank]:
         """
-        Get the most relevant question using RAG
-        
-        Args:
-            user_id: User ID
-            job_id: Job posting ID
-            history_ids: List of already asked question IDs
-            db: Database session
-            
-        Returns:
-            QuestionBank object or None
+        Get the most relevant question using RAG.
+        For the very first turn, returns a fixed self-introduction prompt.
         """
+        # ── 첫 번째 질문: 자기소개 여부를 transcript 텍스트로 확인 ────
+        # history_ids 기반 체크는 id=None인 자기소개를 감지 못하므로
+        # transcript를 직접 조회해 "자기소개" 포함 여부를 확인한다
+        intro_already_asked = False
+        if session_id is not None:
+            intro_already_asked = db.query(Transcript).filter(
+                Transcript.session_id == session_id,
+                Transcript.sender == "ai",
+                Transcript.content.contains("자기소개")
+            ).first() is not None
+
+        if not intro_already_asked:
+            print("[RAG] First question → self-introduction (skipping vector search)")
+            dummy = QuestionBank()
+            dummy.id = None
+            dummy.question_text = "먼저, 간단하게 1분 자기소개를 부탁드립니다."
+            dummy.category = "BEHAVIORAL"
+            dummy.sub_category = "자기소개"
+            return dummy
+
+        # ── 이후 질문은 RAG 벡터 검색 ────────────────────────────────
         # 1. Fetch context
         user = db.query(User).filter(User.id == user_id).first()
         job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
@@ -67,21 +82,13 @@ class InterviewAI:
         # 2. Create query string from context
         query_parts = []
         
-        # Add job requirements
         if job.requirements:
             query_parts.append(f"Job Requirements: {job.requirements[:500]}")
-        
-        # Add target capabilities
         if job.target_capabilities:
             query_parts.append(f"Target Skills: {job.target_capabilities[:300]}")
-        
-        # Add resume context if available
         if user and user.resume_text:
-            # Extract key skills from resume (first 400 chars as summary)
-            resume_summary = user.resume_text[:400]
-            query_parts.append(f"Candidate Background: {resume_summary}")
+            query_parts.append(f"Candidate Background: {user.resume_text[:400]}")
         
-        # Combine into single query
         query_text = " | ".join(query_parts)
         
         print(f"\n[RAG] Query context length: {len(query_text)} chars")
@@ -90,16 +97,15 @@ class InterviewAI:
         # 3. Generate query embedding
         query_embedding = self.embeddings.embed_query(query_text)
         
-        # 4. Vector search with filtering
+        # 4. Vector search – exclude already-asked question IDs
+        # Filter out placeholder id=-1 as well just in case
+        real_history = [qid for qid in history_ids if qid and qid > 0]
         stmt = select(QuestionBank).order_by(
             QuestionBank.embedding.cosine_distance(query_embedding)
         )
+        if real_history:
+            stmt = stmt.where(QuestionBank.id.notin_(real_history))
         
-        # Filter out already asked questions
-        if history_ids:
-            stmt = stmt.where(QuestionBank.id.notin_(history_ids))
-        
-        # Get top result
         result = db.execute(stmt.limit(1)).scalar_one_or_none()
         
         if result:
@@ -109,6 +115,7 @@ class InterviewAI:
             print("[RAG] No suitable question found")
         
         return result
+
     
     def evaluate_answer(
         self,
@@ -130,32 +137,24 @@ class InterviewAI:
         # Create evaluation prompt
         prompt_template = PromptTemplate(
             input_variables=["job_context", "question", "answer"],
-            template="""You are an expert technical interviewer evaluating a candidate's response.
+            template="""당신은 한국어로 기술 면접을 진행하는 전문 AI 면접관입니다.
 
-**CRITICAL: YOU MUST RESPOND IN KOREAN (한국어). All feedback, follow-up questions, and evaluations MUST be written in Korean.**
-
-Job Context:
+[직무 맥락]
 {job_context}
 
-Interview Question:
+[면접 질문]
 {question}
 
-Candidate's Answer:
+[지원자 답변]
 {answer}
 
-Evaluate the answer and provide (IN KOREAN):
-1. A score from 0-100 (0=completely wrong, 100=perfect answer)
-2. Constructive feedback in Korean (2-3 sentences)
-3. A relevant follow-up question in Korean to probe deeper
+[지시사항]
+1. 위 답변을 평가하고 점수(0-100), 피드백, 후속 질문을 생성하세요.
+2. 답변이 "모르겠습니다"이거나 불충분한 경우, 피드백에서 정중하게 격려하세요.
+3. 모든 텍스트는 반드시 자연스러운 비즈니스 한국어로 작성하세요. 영어를 절대 사용하지 마세요.
+4. 아래 JSON 형식만 출력하세요. JSON 이외의 텍스트는 절대 출력하지 마세요.
 
-Return ONLY a valid JSON object in this exact format:
-{{
-    "score": <number 0-100>,
-    "feedback": "<한국어로 피드백>",
-    "follow_up_question": "<한국어로 후속 질문>"
-}}
-
-Do not include any text before or after the JSON. All text fields must be in Korean."""
+{{"score": <0-100 사이 정수>, "feedback": "<2-3문장의 한국어 피드백>", "follow_up_question": "<한국어 후속 질문>"}}"""
         )
         
         # Format prompt
@@ -200,20 +199,20 @@ Do not include any text before or after the JSON. All text fields must be in Kor
             print(f"[EVAL] JSON parse error: {e}")
             print(f"[EVAL] Response text: {response_text[:200]}")
             
-            # Return fallback evaluation
+            # Korean fallback evaluation
             return {
                 "score": 50,
-                "feedback": "I received your answer. Let's continue with the next question.",
-                "follow_up_question": "Can you elaborate on your experience with this topic?"
+                "feedback": "답변을 잘 받았습니다. 다음 질문으로 넘어가겠습니다.",
+                "follow_up_question": "이 주제에 대해 경험하신 것을 좀 더 구체적으로 설명해 주시겠어요?"
             }
         except Exception as e:
             print(f"[EVAL] Evaluation error: {e}")
             
-            # Return fallback evaluation
+            # Korean fallback evaluation
             return {
                 "score": 50,
-                "feedback": "Thank you for your response.",
-                "follow_up_question": "What other aspects of this topic are you familiar with?"
+                "feedback": "답변 감사합니다. 괜찮으시다면 좀 더 자세히 설명해 주세요.",
+                "follow_up_question": "관련하여 실무에서 겪으신 사례가 있으신가요?"
             }
 
 
