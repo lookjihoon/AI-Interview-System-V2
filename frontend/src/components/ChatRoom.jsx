@@ -149,7 +149,8 @@ export default function ChatRoom() {
   const [isLoading, setIsLoading]           = useState(false);
   const [sessionData, setSessionData]       = useState(null);
   const [error, setError]                   = useState('');
-  const [isInitializing, setIsInitializing] = useState(true); // show spinner until ready
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [isCompleted, setIsCompleted]       = useState(false); // interview done
 
   /* smooth scroll */
   const scrollToBottom = useCallback(() => {
@@ -253,6 +254,11 @@ export default function ChatRoom() {
       if (data?.next_question) {
         appendMsg({ sender: 'ai', content: data.next_question, category: data.category ?? '', timestamp: new Date().toISOString() });
       }
+      // Mark completed if the category says so
+      if (data?.category?.includes('면접 종료') || data?.category?.includes('CLOSING')) {
+        const isGoodbye = data?.next_question?.includes('종료') || data?.next_question?.includes('수고');
+        if (isGoodbye && !data?.evaluation) setIsCompleted(true);
+      }
     } catch (err) {
       setError(err?.response?.data?.detail ?? '메시지 전송에 실패했습니다. 다시 시도해 주세요.');
     } finally {
@@ -309,6 +315,12 @@ export default function ChatRoom() {
   }
 
   /* ── 메인 레이아웃 ── */
+  // Progress: count AI turns (excluding greeting & evaluation)
+  const TOTAL_TURNS = 7;
+  const aiTurn = messages.filter(m => m.sender === 'ai').length;
+  const progressPct = Math.min(Math.round((aiTurn / TOTAL_TURNS) * 100), 100);
+  const progressColor = progressPct >= 100 ? 'bg-green-500' : progressPct >= 70 ? 'bg-yellow-400' : 'bg-blue-500';
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
 
@@ -328,6 +340,22 @@ export default function ChatRoom() {
             </svg>
             <span>면접 종료</span>
           </button>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="max-w-4xl mx-auto px-4 pb-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-500 font-medium">
+              면접 진행도: 단계 {Math.min(aiTurn, TOTAL_TURNS)} / {TOTAL_TURNS}
+            </span>
+            <span className="text-xs font-semibold text-gray-600">{progressPct}%</span>
+          </div>
+          <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${progressColor} rounded-full transition-all duration-700 ease-out`}
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
         </div>
       </header>
 
@@ -364,35 +392,56 @@ export default function ChatRoom() {
         </div>
       )}
 
-      {/* 입력 영역 */}
-      <div className="bg-white border-t border-gray-200 shadow-lg">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <form onSubmit={handleSend} className="flex items-end space-x-3">
-            <textarea
-              value={inputValue}
-              onChange={e => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="답변을 입력하세요... (Enter: 전송 / Shift+Enter: 줄바꿈)"
-              rows={3}
-              className="flex-1 resize-none px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-xl
-                         focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                         placeholder-gray-400 text-sm leading-relaxed"
-              disabled={isLoading}
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !inputValue.trim()}
-              className="flex-shrink-0 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold
-                         rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-              </svg>
-            </button>
-          </form>
-          <p className="text-xs text-gray-400 mt-1.5 ml-1">Enter: 전송 · Shift+Enter: 줄바꿈</p>
+      {/* 입력 영역 – 완료시 숨김 */}
+      {isCompleted ? (
+        <div className="bg-green-50 border-t border-green-200">
+          <div className="max-w-4xl mx-auto px-4 py-6 text-center space-y-3">
+            <p className="text-green-700 font-semibold">🎉 면접이 완료되었습니다. 수고하셨습니다!</p>
+            <p className="text-xs text-gray-400">AI가 결과를 분석 중입니다. 리포트 생성까지 최대 1분 소요될 수 있습니다.</p>
+            <div className="flex justify-center gap-3 pt-1">
+              <button
+                onClick={() => navigate(`/report/${sessionId}`)}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors shadow"
+              >
+                📊 결과 리포트 보기
+              </button>
+              <button onClick={() => navigate('/')}
+                className="px-5 py-2.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+                처음으로 돌아가기
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="bg-white border-t border-gray-200 shadow-lg">
+          <div className="max-w-4xl mx-auto px-4 py-4">
+            <form onSubmit={handleSend} className="flex items-end space-x-3">
+              <textarea
+                value={inputValue}
+                onChange={e => setInputValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="답변을 입력하세요... (Enter: 전송 / Shift+Enter: 줄바꿈)"
+                rows={3}
+                className="flex-1 resize-none px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-xl
+                           focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                           placeholder-gray-400 text-sm leading-relaxed"
+                disabled={isLoading}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || !inputValue.trim()}
+                className="flex-shrink-0 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold
+                           rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                </svg>
+              </button>
+            </form>
+            <p className="text-xs text-gray-400 mt-1.5 ml-1">Enter: 전송 · Shift+Enter: 줄바꿈</p>
+          </div>
+        </div>
+      )}
 
     </div>
   );

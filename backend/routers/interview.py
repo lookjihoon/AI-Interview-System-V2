@@ -2,15 +2,38 @@
 Interview API Router
 Handles interview session management and AI-powered chat
 """
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import shutil
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from database import get_db
-from models import InterviewSession, Transcript, User, JobPosting, SessionStatus
-from app.services.ai_service import get_ai_service
+from models import InterviewSession, Transcript, User, JobPosting, SessionStatus, EvaluationReport
+from app.services.ai_service import get_ai_service, generate_final_report
+
+# Upload directory for resumes
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+def parse_pdf(file_path: str) -> str:
+    """Extract text from a PDF file using PyPDFLoader. Returns empty string on failure."""
+    try:
+        from langchain_community.document_loaders import PyPDFLoader
+        loader = PyPDFLoader(file_path)
+        pages = loader.load()
+        text = "\n".join(page.page_content for page in pages)
+        print(f"[PDF] Extracted {len(text)} chars from {file_path}")
+        return text.strip()
+    except Exception as e:
+        print(f"[PDF] Parse error: {e}")
+        return ""
 
 router = APIRouter(
     prefix="/api/interview",
@@ -92,54 +115,81 @@ class SessionDetailResponse(BaseModel):
 # API Endpoints
 @router.post("/start", response_model=InterviewStartResponse, status_code=201)
 async def start_interview(
-    request: InterviewStartRequest,
+    user_id: int = Form(..., description="ID of the candidate"),
+    job_id: int  = Form(..., description="ID of the job posting"),
+    resume: Optional[UploadFile] = File(None, description="PDF resume (optional)"),
     db: Session = Depends(get_db)
 ):
     """
-    Start a new interview session
-    
-    - **user_id**: ID of the candidate
-    - **job_id**: ID of the job posting
-    
-    Returns the session ID and initial greeting
+    Start a new interview session (multipart/form-data).
+
+    - **user_id**: candidate ID
+    - **job_id**: job posting ID
+    - **resume**: optional PDF file — parsed text is stored for personalised questions
     """
-    # Verify user exists
-    user = db.query(User).filter(User.id == request.user_id).first()
+    # Verify user
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Verify job posting exists
-    job = db.query(JobPosting).filter(JobPosting.id == request.job_id).first()
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+
+    # Verify job
+    job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job posting not found")
-    
-    # Create new interview session
+        raise HTTPException(status_code=404, detail="채용 공고를 찾을 수 없습니다.")
+
+    # ── PDF 파싱 ───────────────────────────────────────────────────
+    resume_path_str = None
+    resume_text_str = None
+
+    if resume and resume.filename:
+        if not resume.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="PDF 파일만 업로드할 수 있습니다.")
+
+        # 고유 파일명으로 저장
+        safe_name = f"{uuid.uuid4().hex}_{resume.filename}"
+        save_path  = UPLOAD_DIR / safe_name
+        try:
+            with save_path.open("wb") as f:
+                shutil.copyfileobj(resume.file, f)
+            resume_path_str = str(save_path)
+            resume_text_str = parse_pdf(resume_path_str) or None
+            print(f"[UPLOAD] Resume saved → {save_path}")
+        except Exception as e:
+            print(f"[UPLOAD] Failed to save resume: {e}")
+            # Don't crash — proceed without resume
+        finally:
+            await resume.close()
+
+    # ── 세션 생성 ──────────────────────────────────────────────────
     session = InterviewSession(
-        user_id=request.user_id,
-        job_posting_id=request.job_id,
+        user_id=user_id,
+        job_posting_id=job_id,
+        resume_path=resume_path_str,
+        resume_text=resume_text_str,
         status=SessionStatus.IN_PROGRESS
     )
-    
     db.add(session)
     db.commit()
     db.refresh(session)
-    
-    # Add initial greeting to transcript
-    greeting = (
-        f"안녕하세요, {user.name}님! "
-        f"{job.title} 직무 면접에 오신 것을 환영합니다. "
-        f"저는 AI 면접관입니다. 편안한 마음으로 면접에 임해주세요."
-    )
-    
-    greeting_transcript = Transcript(
-        session_id=session.id,
-        sender="ai",
-        content=greeting
-    )
-    
-    db.add(greeting_transcript)
+
+    # 이력서 업로드 여부를 인사말에 반영
+    if resume_text_str:
+        greeting = (
+            f"안녕하세요, {user.name}님! "
+            f"{job.title} 직무 면접에 오신 것을 환영합니다. "
+            f"이력서를 잘 받았습니다. 이력서를 바탕으로 맞춤형 질문을 드리겠습니다. "
+            f"편안한 마음으로 면접에 임해주세요."
+        )
+    else:
+        greeting = (
+            f"안녕하세요, {user.name}님! "
+            f"{job.title} 직무 면접에 오신 것을 환영합니다. "
+            f"저는 AI 면접관입니다. 편안한 마음으로 면접에 임해주세요."
+        )
+
+    db.add(Transcript(session_id=session.id, sender="ai", content=greeting))
     db.commit()
-    
+
     return InterviewStartResponse(
         session_id=session.id,
         message=greeting,
@@ -179,36 +229,49 @@ async def chat(
     
     # If user provided an answer, evaluate it
     if request.user_answer:
-        # Save user's answer to transcript
-        user_transcript = Transcript(
-            session_id=session.id,
-            sender="human",
-            content=request.user_answer
-        )
-        db.add(user_transcript)
+        # Save user's answer to transcript first
+        db.add(Transcript(session_id=session.id, sender="human", content=request.user_answer))
         db.commit()
-        
-        # Get the previous question from transcript
+
+        # Count human turns to detect final turn (turn 7 = answer to closing question)
+        human_turn_count = db.query(Transcript).filter(
+            Transcript.session_id == session.id,
+            Transcript.sender == "human"
+        ).count()
+
+        # Turn 7: user answered the closing question → dynamic reply then COMPLETED
+        if human_turn_count >= 7:
+            goodbye = ai_service.generate_closing_response(request.user_answer or "")
+            db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
+            session.status = SessionStatus.COMPLETED
+            db.commit()
+            # Generate final report (best-effort, won't block response)
+            try:
+                generate_final_report(session_id=session.id, db=db)
+            except Exception as report_err:
+                print(f"[REPORT] Non-blocking error: {report_err}")
+            return ChatResponse(
+                evaluation=None,
+                next_question=goodbye,
+                question_id=None,
+                category="CLOSING / 면접 종료"
+            )
+
+        # Normal evaluation for turns 1-6
         previous_question = db.query(Transcript).filter(
             Transcript.session_id == session.id,
             Transcript.sender == "ai"
         ).order_by(Transcript.timestamp.desc()).first()
-        
+
         if previous_question:
-            # Get job context for evaluation
-            job = db.query(JobPosting).filter(
-                JobPosting.id == session.job_posting_id
-            ).first()
-            
+            job = db.query(JobPosting).filter(JobPosting.id == session.job_posting_id).first()
             job_context = f"{job.requirements or ''} {job.target_capabilities or ''}"
-            
-            # Evaluate the answer
             evaluation = ai_service.evaluate_answer(
                 question_text=previous_question.content,
                 user_answer=request.user_answer,
                 job_context=job_context
             )
-    
+
     # Get history of asked questions by extracting question_ids from transcript
     asked_transcripts = db.query(Transcript).filter(
         Transcript.session_id == session.id,
@@ -227,34 +290,51 @@ async def chat(
         job_id=session.job_posting_id,
         history_ids=history_ids,
         db=db,
-        session_id=session.id   # needed for transcript-based self-intro check
+        session_id=session.id,
+        session_resume_text=session.resume_text  # use uploaded PDF resume if available
     )
     
+    # ── CLOSING phase (turn 6): ask closing question, keep IN_PROGRESS ────────
+    if next_question_obj and getattr(next_question_obj, "category", "") == "CLOSING":
+        db.add(Transcript(session_id=session.id, sender="ai", content=next_question_obj.question_text))
+        # Do NOT set COMPLETED yet — user still needs to reply
+        db.commit()
+        return ChatResponse(
+            evaluation=evaluation,
+            next_question=next_question_obj.question_text,
+            question_id=None,
+            category="CLOSING / 마무리"
+        )
+
+    # ── No question found ────────────────────────────────────────────────────
     if not next_question_obj:
-        # No more questions available, end interview
+        goodbye = "오늘 면접은 여기까지입니다. 수고하셨습니다. 결과를 분석 후 안내드리겠습니다."
+        db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
         session.status = SessionStatus.COMPLETED
         db.commit()
-        
-        raise HTTPException(
-            status_code=200,
-            detail="Interview completed! No more questions available."
+        return ChatResponse(
+            evaluation=evaluation,
+            next_question=goodbye,
+            question_id=None,
+            category="CLOSING / 마무리"
         )
-    
+
+    # ── Normal question flow ─────────────────────────────────────────────────
     # Save the new question to transcript with question_id
     ai_transcript = Transcript(
         session_id=session.id,
         sender="ai",
         content=next_question_obj.question_text,
-        question_id=next_question_obj.id  # Track which question was asked
+        question_id=next_question_obj.id
     )
     db.add(ai_transcript)
     db.commit()
-    
+
     return ChatResponse(
         evaluation=evaluation,
         next_question=next_question_obj.question_text,
         question_id=next_question_obj.id,
-        category=f"{next_question_obj.category} / {next_question_obj.sub_category}"
+        category=f"{next_question_obj.category} / {next_question_obj.sub_category or ''}"
     )
 
 
@@ -317,9 +397,55 @@ async def end_interview(
     
     session.status = SessionStatus.COMPLETED
     db.commit()
-    
+
     return {
         "message": "Interview session ended successfully",
         "session_id": session_id,
         "status": session.status.value
     }
+
+
+# ── Pydantic schema for Report response ─────────────────────────────────────
+class ReportResponse(BaseModel):
+    session_id: int
+    total_score: int
+    tech_score: Optional[int]
+    communication_score: Optional[int]
+    problem_solving_score: Optional[int]
+    summary: Optional[str]
+    details: Optional[Dict[str, Any]]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/session/{session_id}/report", response_model=ReportResponse)
+async def get_report(
+    session_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Fetch the final evaluation report for a completed session.
+    Returns 404 while report is still being generated.
+    """
+    report = db.query(EvaluationReport).filter(
+        EvaluationReport.session_id == session_id
+    ).first()
+
+    if not report:
+        raise HTTPException(
+            status_code=404,
+            detail="리포트가 아직 생성 중입니다. 잠시 후 다시 시도해 주세요."
+        )
+
+    return ReportResponse(
+        session_id=report.session_id,
+        total_score=report.total_score,
+        tech_score=report.tech_score,
+        communication_score=report.communication_score,
+        problem_solving_score=report.problem_solving_score,
+        summary=report.summary,
+        details=report.details,
+        created_at=report.created_at
+    )

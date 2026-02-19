@@ -82,7 +82,8 @@ class InterviewSession(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     job_posting_id = Column(Integer, ForeignKey("job_postings.id", ondelete="CASCADE"), nullable=False, index=True)
-    resume_path = Column(String(500), nullable=True)  # Path to uploaded resume file
+    resume_path = Column(String(500), nullable=True)   # Path to uploaded resume file
+    resume_text = Column(Text, nullable=True)           # Parsed resume text for AI context
     status = Column(SQLEnum(SessionStatus), nullable=False, default=SessionStatus.IN_PROGRESS, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
