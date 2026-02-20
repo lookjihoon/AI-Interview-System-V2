@@ -61,6 +61,9 @@ class JobPosting(Base):
     requirements = Column(Text, nullable=True)  # Required skills and qualifications
     min_experience = Column(Integer, nullable=False, default=0)  # Minimum years of experience
     target_capabilities = Column(Text, nullable=True)  # Target capabilities for evaluation
+    conditions = Column(Text, nullable=True)        # 근무조건 / 급여 / 근무시간
+    procedures = Column(Text, nullable=True)        # 전형절차 / 면접방식
+    application_method = Column(Text, nullable=True)  # 지원방법
     status = Column(SQLEnum(JobStatus), nullable=False, default=JobStatus.ACTIVE, index=True)
     posted_date = Column(Date, server_default=func.current_date(), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -109,6 +112,7 @@ class Transcript(Base):
     sender = Column(String(50), nullable=False)  # 'ai' or 'human'
     content = Column(Text, nullable=False)
     question_id = Column(Integer, ForeignKey("question_bank.id"), nullable=True)  # Track which question was asked
+    score = Column(Integer, nullable=True)  # Per-turn evaluation score (0-100), only set for human turns
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

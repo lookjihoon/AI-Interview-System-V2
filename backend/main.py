@@ -1,14 +1,16 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+import os
 import torch
 
 from database import engine, get_db, Base
 from models import User, JobPosting, InterviewSession, Transcript, EvaluationReport, QuestionBank
 
 # Import routers
-from routers import recruit, candidate, interview
+from routers import recruit, candidate, interview, admin, vision
 
 app = FastAPI(
     title="AI Interview System API",
@@ -94,6 +96,12 @@ async def initialize_seed_data():
 app.include_router(recruit.router)
 app.include_router(candidate.router)
 app.include_router(interview.router)
+app.include_router(admin.router, prefix="/api/admin")
+app.include_router(vision.router)
+
+# Serve generated TTS audio files as static files
+os.makedirs("uploads/audio", exist_ok=True)
+app.mount("/static/audio", StaticFiles(directory="uploads/audio"), name="audio")
 
 
 if __name__ == "__main__":

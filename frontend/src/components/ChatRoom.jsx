@@ -4,8 +4,9 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 
 const API_BASE_URL = 'http://localhost:8000';
+const VISION_INTERVAL_MS = 3000; // capture every 3 seconds
 
-/* ─── 타이핑 인디케이터 ─────────────────────────────────────────── */
+/* ─── Typing Indicator ──────────────────────────────────────────────── */
 function TypingIndicator() {
   return (
     <div className="flex items-end space-x-3">
@@ -27,7 +28,7 @@ function TypingIndicator() {
   );
 }
 
-/* ─── AI 말풍선 ─────────────────────────────────────────────────── */
+/* ─── AI Bubble ─────────────────────────────────────────────────────── */
 function AiBubble({ content = '', category }) {
   return (
     <div className="flex items-end space-x-3">
@@ -55,15 +56,13 @@ function AiBubble({ content = '', category }) {
             </ReactMarkdown>
           </div>
         </div>
-        {category && (
-          <p className="text-xs text-gray-400 mt-1 ml-2"># {category}</p>
-        )}
+        {category && <p className="text-xs text-gray-400 mt-1 ml-2"># {category}</p>}
       </div>
     </div>
   );
 }
 
-/* ─── 사용자 말풍선 ──────────────────────────────────────────────── */
+/* ─── User Bubble ───────────────────────────────────────────────────── */
 function UserBubble({ content = '' }) {
   return (
     <div className="flex items-end justify-end space-x-3">
@@ -80,22 +79,18 @@ function UserBubble({ content = '' }) {
   );
 }
 
-/* ─── 평가 박스 ──────────────────────────────────────────────────── */
+/* ─── Evaluation Box ────────────────────────────────────────────────── */
 function EvaluationBox({ content }) {
   const [open, setOpen] = useState(true);
   if (!content || typeof content !== 'object') return null;
-
   const score = typeof content.score === 'number' ? content.score : 0;
   const scoreColor = score >= 80 ? 'text-green-600' : score >= 50 ? 'text-yellow-600' : 'text-red-500';
   const barColor   = score >= 80 ? 'bg-green-500'  : score >= 50 ? 'bg-yellow-400'  : 'bg-red-400';
-
   return (
     <div className="flex justify-end mr-11">
       <div className="w-full max-w-2xl bg-green-50 border border-green-200 rounded-xl overflow-hidden shadow-sm">
-        <button
-          onClick={() => setOpen(o => !o)}
-          className="w-full flex items-center justify-between px-4 py-2 bg-green-100 hover:bg-green-200 transition-colors text-left"
-        >
+        <button onClick={() => setOpen(o => !o)}
+          className="w-full flex items-center justify-between px-4 py-2 bg-green-100 hover:bg-green-200 transition-colors text-left">
           <div className="flex items-center space-x-2">
             <svg className="w-4 h-4 text-green-600" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"/>
@@ -108,7 +103,6 @@ function EvaluationBox({ content }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
           </svg>
         </button>
-
         {open && (
           <div className="px-4 py-3 space-y-3">
             <div>
@@ -117,18 +111,8 @@ function EvaluationBox({ content }) {
                 <div className={`h-full ${barColor} rounded-full transition-all duration-500`} style={{ width: `${score}%` }} />
               </div>
             </div>
-            {content.feedback && (
-              <div>
-                <p className="text-xs font-semibold text-green-800 mb-1">피드백</p>
-                <p className="text-sm text-gray-700 leading-relaxed">{content.feedback}</p>
-              </div>
-            )}
-            {content.follow_up_question && (
-              <div>
-                <p className="text-xs font-semibold text-green-800 mb-1">추가 질문</p>
-                <p className="text-sm text-gray-600 italic">{content.follow_up_question}</p>
-              </div>
-            )}
+            {content.feedback && <div><p className="text-xs font-semibold text-green-800 mb-1">피드백</p><p className="text-sm text-gray-700 leading-relaxed">{content.feedback}</p></div>}
+            {content.follow_up_question && <div><p className="text-xs font-semibold text-green-800 mb-1">추가 질문</p><p className="text-sm text-gray-600 italic">{content.follow_up_question}</p></div>}
           </div>
         )}
       </div>
@@ -136,313 +120,538 @@ function EvaluationBox({ content }) {
   );
 }
 
-/* ─── 메인 컴포넌트 ──────────────────────────────────────────────── */
+/* ─── Mic Button (STT) ──────────────────────────────────────────────── */
+function MicButton({ onResult, disabled }) {
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef(null);
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return null;
+
+  const startListening = () => {
+    if (listening) { recognitionRef.current?.stop(); return; }
+    const rec = new SpeechRecognition();
+    rec.lang = 'ko-KR';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.continuous = true;
+
+    rec.onstart = () => setListening(true);
+    rec.onend   = () => setListening(false);
+    rec.onerror = (e) => {
+      if (e.error !== 'no-speech') setListening(false);
+    };
+    rec.onresult = (e) => {
+      let combined = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) combined += e.results[i][0].transcript;
+      }
+      if (combined.trim()) onResult(combined.trim());
+    };
+    recognitionRef.current = rec;
+    rec.start();
+  };
+
+  return (
+    <button type="button" onClick={startListening} disabled={disabled}
+      title={listening ? '듣는 중... (클릭하여 중지)' : '마이크로 답변하기'}
+      className={`flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all
+        ${listening ? 'bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'}
+        disabled:opacity-40 disabled:cursor-not-allowed`}>
+      {listening ? (
+        <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+          <rect x="2" y="9" width="2" height="6" rx="1"/><rect x="6" y="5" width="2" height="14" rx="1"/>
+          <rect x="10" y="3" width="2" height="18" rx="1"/><rect x="14" y="5" width="2" height="14" rx="1"/>
+          <rect x="18" y="9" width="2" height="6" rx="1"/>
+        </svg>
+      ) : (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/* ─── Main Component ─────────────────────────────────────────────────── */
 export default function ChatRoom() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
-  const messagesEndRef = useRef(null);
-  const hasInitialized = useRef(false);
+  const messagesEndRef  = useRef(null);
+  const hasInitialized  = useRef(false);
+  const audioRef        = useRef(null);
+  const canvasRef       = useRef(null);
+  const visionTimerRef  = useRef(null);
+  const userVideoRef    = useRef(null); // left-pane large webcam
 
-  // State – safe defaults (never null)
-  const [messages, setMessages]             = useState([]);   // always array
+  const [messages, setMessages]             = useState([]);
   const [inputValue, setInputValue]         = useState('');
   const [isLoading, setIsLoading]           = useState(false);
   const [sessionData, setSessionData]       = useState(null);
   const [error, setError]                   = useState('');
   const [isInitializing, setIsInitializing] = useState(true);
-  const [isCompleted, setIsCompleted]       = useState(false); // interview done
+  const [isCompleted, setIsCompleted]       = useState(false);
+  const [ttsEnabled, setTtsEnabled]         = useState(true);
+  const [isPlaying, setIsPlaying]           = useState(false); // TTS currently playing
+  const [cameraActive, setCameraActive]     = useState(false);
+  const [cameraStream, setCameraStream]     = useState(null);
+  const [emotionStats, setEmotionStats]     = useState({}); // { emotion: count } tally
+  const [visionAnalyzing, setVisionAnalyzing] = useState(false);
 
   /* smooth scroll */
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  const scrollToBottom = useCallback(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
-  /* append helper */
   const appendMsg = (msg) => setMessages(prev => [...prev, msg]);
 
-  /* ── 첫 질문 요청 ── */
+  /* ── TTS auto-play (tracks isPlaying for avatar animation) ── */
+  const playAudio = useCallback((audioUrl) => {
+    if (!audioUrl || !ttsEnabled) return;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    const audio = new Audio(`${API_BASE_URL}${audioUrl}`);
+    audioRef.current = audio;
+    setIsPlaying(true);
+    audio.onended = () => setIsPlaying(false);
+    audio.onerror = () => setIsPlaying(false);
+    audio.play().catch(err => { console.warn('[TTS] play failed:', err); setIsPlaying(false); });
+  }, [ttsEnabled]);
+
+  /* ── Webcam startup ─────────────────────────────────────────── */
+  useEffect(() => {
+    let stream;
+    const startCamera = async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(
+          { video: { width: 320, height: 240, facingMode: 'user' }, audio: false }
+        );
+        setCameraStream(stream);
+        setCameraActive(true);
+      } catch (e) { console.warn('[VISION] Camera unavailable:', e.message); }
+    };
+    startCamera();
+    return () => {
+      stream?.getTracks().forEach(t => t.stop());
+      if (visionTimerRef.current) clearInterval(visionTimerRef.current);
+    };
+  }, []);
+
+  /* ── Bind cameraStream to the left-pane video element ────── */
+  useEffect(() => {
+    const vid = userVideoRef.current;
+    if (!vid) return;
+    if (cameraStream) {
+      vid.srcObject = cameraStream;
+      vid.play().catch(() => {});
+    } else {
+      vid.srcObject = null;
+    }
+  }, [cameraStream]);
+
+  /* ── Vision capture loop (every 3 s) ─────────────────────── */
+  useEffect(() => {
+    if (!cameraActive || !cameraStream) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Dedicated off-screen video for frame capture
+    const capVid = document.createElement('video');
+    capVid.srcObject = cameraStream;
+    capVid.muted = true;
+    capVid.playsInline = true;
+    capVid.play().catch(() => {});
+
+    visionTimerRef.current = setInterval(async () => {
+      if (capVid.readyState < 2) return;
+
+      const ctx = canvas.getContext('2d');
+      canvas.width  = capVid.videoWidth  || 320;
+      canvas.height = capVid.videoHeight || 240;
+      ctx.drawImage(capVid, 0, 0, canvas.width, canvas.height);
+      const b64 = canvas.toDataURL('image/jpeg', 0.75);
+
+      setVisionAnalyzing(true);
+      try {
+        const { data } = await axios.post(`${API_BASE_URL}/api/interview/vision`, { image_b64: b64 });
+        console.log('[VISION] response:', data);
+        if (data?.dominant_emotion && data.status !== 'no_face_detected') {
+          setEmotionStats(prev => ({
+            ...prev,
+            [data.dominant_emotion]: (prev[data.dominant_emotion] || 0) + 1
+          }));
+        }
+      } catch (err) {
+        console.warn('[VISION] POST failed:', err?.message);
+      } finally { setVisionAnalyzing(false); }
+    }, VISION_INTERVAL_MS);
+
+    return () => {
+      clearInterval(visionTimerRef.current);
+      capVid.srcObject = null;
+    };
+  }, [cameraActive, cameraStream]);
+
+  /* ── First question ─────────────────────────────────────────── */
   const getFirstQuestion = useCallback(async () => {
     try {
       setIsLoading(true);
-      const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, {
-        session_id: parseInt(sessionId, 10)
-      });
+      const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, { session_id: parseInt(sessionId, 10) });
       if (data?.next_question) {
-        appendMsg({
-          sender: 'ai',
-          content: data.next_question,
-          category: data.category ?? '',
-          timestamp: new Date().toISOString()
-        });
+        appendMsg({ sender: 'ai', content: data.next_question, category: data.category ?? '', timestamp: new Date().toISOString() });
+        playAudio(data.audio_url);
       }
-    } catch {
-      setError('첫 질문을 가져오지 못했습니다.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sessionId]);
+    } catch { setError('첫 질문을 가져오지 못했습니다.'); }
+    finally  { setIsLoading(false); }
+  }, [sessionId, playAudio]);
 
-  /* ── 세션 초기화 (Strict Mode 이중 실행 방지) ── */
+  /* ── Load session & history ─────────────────────────────────── */
   useEffect(() => {
     if (hasInitialized.current) return;
     hasInitialized.current = true;
-
     const init = async () => {
       try {
-        const { data } = await axios.get(`${API_BASE_URL}/api/interview/session/${sessionId}`);
+        const { data: sess } = await axios.get(`${API_BASE_URL}/api/interview/session/${sessionId}`);
+        setSessionData(sess);
 
-        setSessionData({
-          userName: data?.user_name ?? '지원자',
-          jobTitle: data?.job_title ?? '면접 세션',
-          status:   data?.status   ?? 'unknown'
-        });
-
-        // transcript → messages (safe mapping)
-        const transcript = Array.isArray(data?.transcript) ? data.transcript : [];
-        const formatted = transcript.map(t => ({
-          sender:    t?.sender    ?? 'ai',
-          content:   t?.content   ?? '',
-          timestamp: t?.timestamp ?? new Date().toISOString()
-        }));
-        setMessages(formatted);
-
-        // 자기소개 질문이 아직 없으면 첫 질문 요청
-        const alreadyHasQ = formatted.some(
-          m => m.sender === 'ai' && String(m.content).includes('자기소개')
-        );
-        if (!alreadyHasQ) {
-          await getFirstQuestion();
+        // Use transcript embedded in session response (avoids separate round-trip).
+        // Fall back to the /transcript endpoint for older API versions.
+        let transcriptItems = [];
+        if (Array.isArray(sess.transcript)) {
+          transcriptItems = sess.transcript;
+        } else {
+          try {
+            const { data: txData } = await axios.get(`${API_BASE_URL}/api/interview/session/${sessionId}/transcript`);
+            transcriptItems = Array.isArray(txData) ? txData : [];
+          } catch (txErr) {
+            // 404 = brand-new session with no messages yet → treat as empty history
+            if (txErr?.response?.status !== 404) {
+              console.warn('[INIT] transcript fetch failed:', txErr?.message);
+            }
+            transcriptItems = [];
+          }
         }
+
+        const formatted = transcriptItems.map(t => ({ sender: t?.sender ?? 'ai', content: t?.content ?? '', timestamp: t?.timestamp ?? new Date().toISOString() }));
+        setMessages(formatted);
+        const alreadyHasQ = formatted.some(m => m.sender === 'ai' && String(m.content).includes('자기소개'));
+        if (!alreadyHasQ) await getFirstQuestion();
       } catch (err) {
         const status = err?.response?.status;
-        if (status === 404) {
-          setError('세션을 찾을 수 없습니다. 면접을 새로 시작해 주세요.');
-        } else if (!err.response) {
-          setError('서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
-        } else {
-          setError('세션 로딩에 실패했습니다. 잠시 후 다시 시도해 주세요.');
-        }
-      } finally {
-        setIsInitializing(false);
-      }
+        if (status === 404)         setError('세션을 찾을 수 없습니다. 면접을 새로 시작해 주세요.');
+        else if (!err.response)     setError('서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+        else                        setError('세션 로딩에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      } finally { setIsInitializing(false); }
     };
-
     init();
   }, [sessionId, getFirstQuestion]);
 
-  /* ── 답변 전송 ── */
+
+  /* ── Send answer ────────────────────────────────────────────── */
   const handleSend = async (e) => {
     e.preventDefault();
     if (!inputValue.trim() || isLoading) return;
-
     const answer = inputValue.trim();
-    setInputValue('');
-    setError('');
+    setInputValue(''); setError('');
     appendMsg({ sender: 'human', content: answer, timestamp: new Date().toISOString() });
     setIsLoading(true);
+
+    // Convert emotionStats counts to percentages for the backend
+    const total_samples = Object.values(emotionStats).reduce((s, c) => s + c, 0);
+    const vision_data = total_samples > 0
+      ? Object.fromEntries(Object.entries(emotionStats).map(([k, v]) => [k, parseFloat(((v / total_samples) * 100).toFixed(1))]))
+      : null;
 
     try {
       const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, {
         session_id:  parseInt(sessionId, 10),
-        user_answer: answer
+        user_answer: answer,
+        vision_data
       });
-
       if (data?.evaluation && typeof data.evaluation === 'object') {
         appendMsg({ sender: 'evaluation', content: data.evaluation, timestamp: new Date().toISOString() });
       }
       if (data?.next_question) {
         appendMsg({ sender: 'ai', content: data.next_question, category: data.category ?? '', timestamp: new Date().toISOString() });
+        playAudio(data.audio_url);
       }
-      // Mark completed if the category says so
-      if (data?.category?.includes('면접 종료') || data?.category?.includes('CLOSING')) {
-        const isGoodbye = data?.next_question?.includes('종료') || data?.next_question?.includes('수고');
-        if (isGoodbye && !data?.evaluation) setIsCompleted(true);
+      if ((data?.category?.includes('면접 종료') || data?.category?.includes('CLOSING'))
+          && data?.next_question?.includes('종료') && !data?.evaluation) {
+        setIsCompleted(true);
       }
     } catch (err) {
       setError(err?.response?.data?.detail ?? '메시지 전송에 실패했습니다. 다시 시도해 주세요.');
-    } finally {
-      setIsLoading(false);
-    }
+    } finally { setIsLoading(false); }
   };
 
-  /* Enter = 전송, Shift+Enter = 줄바꿈 */
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); }
-  };
+  const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } };
+  const handleSpeechResult = (t) => setInputValue(prev => prev ? `${prev} ${t}` : t);
 
-  /* ── 면접 종료 ── */
   const handleEnd = async () => {
     if (!window.confirm('면접을 종료하시겠습니까?')) return;
-    try {
-      await axios.post(`${API_BASE_URL}/api/interview/session/${sessionId}/end`);
-      navigate('/');
-    } catch {
-      setError('면접 종료에 실패했습니다. 다시 시도해 주세요.');
-    }
+    try { await axios.post(`${API_BASE_URL}/api/interview/session/${sessionId}/end`); navigate('/'); }
+    catch { setError('면접 종료에 실패했습니다.'); }
   };
 
-  /* ── 로딩 화면 ── */
-  if (isInitializing) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="relative w-16 h-16 mx-auto">
-            <div className="absolute inset-0 rounded-full border-4 border-blue-100" />
-            <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin" />
-          </div>
-          <p className="text-gray-600 font-medium">면접 로딩 중...</p>
+  /* ── Loading & Error screens ────────────────────────────────── */
+  if (isInitializing) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="text-center space-y-4">
+        <div className="relative w-16 h-16 mx-auto">
+          <div className="absolute inset-0 rounded-full border-4 border-blue-100" />
+          <div className="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin" />
         </div>
+        <p className="text-gray-600 font-medium">면접 로딩 중...</p>
       </div>
-    );
-  }
+    </div>
+  );
 
-  /* ── 에러 전용 화면 (세션을 아예 못 가져온 경우) ── */
-  if (error && messages.length === 0) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow p-8 max-w-md text-center space-y-4">
-          <div className="text-red-500 text-5xl">⚠️</div>
-          <h2 className="text-lg font-bold text-gray-900">오류 발생</h2>
-          <p className="text-gray-600 text-sm">{error}</p>
-          <button onClick={() => navigate('/')}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm">
-            처음으로 돌아가기
-          </button>
-        </div>
+  if (error && messages.length === 0) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow p-8 max-w-md text-center space-y-4">
+        <div className="text-red-500 text-5xl">⚠️</div>
+        <h2 className="text-lg font-bold text-gray-900">오류 발생</h2>
+        <p className="text-gray-600 text-sm">{error}</p>
+        <button onClick={() => navigate('/')} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">처음으로 돌아가기</button>
       </div>
-    );
-  }
+    </div>
+  );
 
-  /* ── 메인 레이아웃 ── */
-  // Progress: count AI turns (excluding greeting & evaluation)
-  const TOTAL_TURNS = 7;
-  const aiTurn = messages.filter(m => m.sender === 'ai').length;
-  const progressPct = Math.min(Math.round((aiTurn / TOTAL_TURNS) * 100), 100);
-  const progressColor = progressPct >= 100 ? 'bg-green-500' : progressPct >= 70 ? 'bg-yellow-400' : 'bg-blue-500';
-
+  /* ── Main render: split-screen ──────────────────────────────── */
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <div className="h-screen bg-slate-900 flex flex-col md:flex-row overflow-hidden">
 
-      {/* 헤더 */}
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold text-gray-900">
-              {sessionData?.jobTitle ?? '면접 세션'}
-            </h1>
-            <p className="text-xs text-gray-500">지원자: {sessionData?.userName ?? '-'}</p>
+      {/* Hidden canvas for vision capture */}
+      <canvas ref={canvasRef} className="hidden" />
+
+      {/* ══ LEFT PANE — AI Avatar + User Webcam (40%) ══ */}
+      <div className="flex flex-col items-center justify-between bg-gradient-to-b from-slate-800 to-slate-900 md:w-2/5 p-6 border-r border-slate-700/50">
+
+        {/* Session info */}
+        <div className="w-full text-center mb-4">
+          <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">AI 면접관</p>
+          <h2 className="text-white font-bold text-sm mt-1">{sessionData?.jobTitle ?? '면접 세션'}</h2>
+          <p className="text-slate-500 text-xs">지원자: {sessionData?.userName ?? '-'}</p>
+        </div>
+
+        {/* AI Avatar */}
+        <div className="flex flex-col items-center space-y-4 flex-shrink-0">
+          <div className={`relative rounded-full p-1 transition-all duration-300 ${
+            isPlaying
+              ? 'ring-4 ring-blue-400 ring-offset-4 ring-offset-slate-800 shadow-[0_0_30px_rgba(59,130,246,0.6)] animate-pulse'
+              : 'ring-2 ring-slate-600 ring-offset-2 ring-offset-slate-800'
+          }`}>
+            <div className="w-32 h-32 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-2xl">
+              <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+              </svg>
+            </div>
+            {isPlaying && (
+              <div className="absolute -bottom-1 -right-1 bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center shadow">
+                <svg className="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="2" y="9" width="2" height="6" rx="1"/><rect x="6" y="5" width="2" height="14" rx="1"/>
+                  <rect x="10" y="3" width="2" height="18" rx="1"/><rect x="14" y="5" width="2" height="14" rx="1"/>
+                  <rect x="18" y="9" width="2" height="6" rx="1"/>
+                </svg>
+              </div>
+            )}
           </div>
+          <div className="text-center">
+            <p className="text-white font-semibold text-sm">AI 면접관</p>
+            <p className={`text-xs mt-0.5 ${isPlaying ? 'text-blue-400 animate-pulse' : 'text-slate-500'}`}>
+              {isPlaying ? '🔊 답변 읽는 중...' : '● 대기 중'}
+            </p>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="w-full max-w-xs space-y-1.5 my-4">
+          {(() => {
+            const TOTAL_TURNS = 7;
+            const aiTurn = messages.filter(m => m.sender === 'ai').length;
+            const pct = Math.min(Math.round((aiTurn / TOTAL_TURNS) * 100), 100);
+            const barColor = pct >= 100 ? 'bg-green-500' : pct >= 70 ? 'bg-yellow-400' : 'bg-blue-500';
+            return (
+              <>
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>진행도: {Math.min(aiTurn, TOTAL_TURNS)}/{TOTAL_TURNS}</span>
+                  <span>{pct}%</span>
+                </div>
+                <div className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden">
+                  <div className={`h-full ${barColor} rounded-full transition-all duration-700`} style={{ width: `${pct}%` }} />
+                </div>
+              </>
+            );
+          })()}
+        </div>
+
+        {/* User webcam */}
+        <div className="w-full flex-1 flex flex-col items-center min-h-0">
+          {visionAnalyzing && (
+            <div className="flex items-center space-x-1.5 text-xs text-blue-400 animate-pulse mb-2">
+              <span className="w-2 h-2 bg-blue-400 rounded-full" />
+              <span>감정 분석 중...</span>
+            </div>
+          )}
+          {Object.keys(emotionStats).length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-2 justify-center">
+              {Object.entries(emotionStats)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 3)
+                .map(([em, cnt]) => (
+                  <span key={em} className="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full">
+                    {em} {cnt}
+                  </span>
+                ))
+              }
+            </div>
+          )}
+          <div className={`relative w-full rounded-xl overflow-hidden border-2 transition-colors flex-1 min-h-0 ${
+            cameraActive ? 'border-green-500/60' : 'border-slate-700'
+          }`} style={{ maxHeight: '220px' }}>
+            <video
+              ref={userVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            {!cameraActive && (
+              <div className="absolute inset-0 bg-slate-800 flex flex-col items-center justify-center">
+                <svg className="w-8 h-8 text-slate-600 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span className="text-slate-500 text-xs">카메라 꺼짐</span>
+              </div>
+            )}
+            <div className={`absolute top-2 left-2 flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+              cameraActive ? 'bg-green-500/80 text-white' : 'bg-slate-700/80 text-slate-400'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${cameraActive ? 'bg-white animate-pulse' : 'bg-slate-500'}`} />
+              <span>{cameraActive ? 'LIVE' : 'OFF'}</span>
+            </div>
+            {Object.values(emotionStats).reduce((a, b) => a + b, 0) > 0 && (
+              <div className="absolute bottom-2 right-2 text-xs bg-black/50 text-slate-300 px-1.5 py-0.5 rounded">
+                📷 {Object.values(emotionStats).reduce((a, b) => a + b, 0)}샘플
+              </div>
+            )}
+          </div>
+          <p className="text-slate-500 text-xs mt-1.5">나의 화면</p>
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center space-x-2 mt-3">
+          <button
+            onClick={() => { if (ttsEnabled && audioRef.current) { audioRef.current.pause(); audioRef.current = null; setIsPlaying(false); } setTtsEnabled(v => !v); }}
+            title={ttsEnabled ? '음성 끄기' : '음성 켜기'}
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors ${ttsEnabled ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30' : 'bg-slate-700 text-slate-500 hover:bg-slate-600'}`}>
+            {ttsEnabled ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072M19.07 4.93a10 10 0 010 14.14M12 6v12M9 9l-3 3H3v0h3l3 3"/>
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/>
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"/>
+              </svg>
+            )}
+          </button>
           <button onClick={handleEnd}
-            className="flex items-center space-x-1 px-4 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            className="flex items-center space-x-1 px-3 py-2 text-xs font-medium text-red-400 border border-red-800/60 rounded-lg hover:bg-red-900/30 transition-colors">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
             </svg>
             <span>면접 종료</span>
           </button>
         </div>
-
-        {/* Progress Bar */}
-        <div className="max-w-4xl mx-auto px-4 pb-3">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-500 font-medium">
-              면접 진행도: 단계 {Math.min(aiTurn, TOTAL_TURNS)} / {TOTAL_TURNS}
-            </span>
-            <span className="text-xs font-semibold text-gray-600">{progressPct}%</span>
-          </div>
-          <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
-            <div
-              className={`h-full ${progressColor} rounded-full transition-all duration-700 ease-out`}
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-        </div>
-      </header>
-
-      {/* 채팅 영역 */}
-      <div className="flex-1 overflow-y-auto bg-gray-50">
-        <div className="max-w-4xl mx-auto px-4 py-6 space-y-5">
-
-          {messages.map((msg, i) => {
-            if (!msg) return null; // null guard
-            return (
-              <div key={i}>
-                {msg.sender === 'ai'         && <AiBubble content={msg.content} category={msg.category} />}
-                {msg.sender === 'human'      && <UserBubble content={msg.content} />}
-                {msg.sender === 'evaluation' && <EvaluationBox content={msg.content} />}
-              </div>
-            );
-          })}
-
-          {isLoading && <TypingIndicator />}
-          <div ref={messagesEndRef} />
-        </div>
       </div>
 
-      {/* 인라인 에러 배너 */}
-      {error && messages.length > 0 && (
-        <div className="max-w-4xl mx-auto w-full px-4 py-2">
-          <div className="flex items-center space-x-2 bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm">
-            <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd"/>
-            </svg>
-            <span className="flex-1">{error}</span>
-            <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">✕</button>
+      {/* ══ RIGHT PANE — Chat UI (60%) ══ */}
+      <div className="flex flex-col flex-1 md:w-3/5 bg-gray-50 min-h-0 overflow-hidden">
+
+        {/* Right header */}
+        <div className="bg-white border-b border-gray-200 px-5 py-3 flex-shrink-0">
+          <p className="text-sm font-semibold text-gray-800">{sessionData?.jobTitle ?? '면접'} — 대화</p>
+          <p className="text-xs text-gray-400">답변을 입력하거나 마이크 버튼을 누르세요</p>
+        </div>
+
+        {/* Chat messages */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="px-5 py-5 space-y-5">
+            {messages.map((msg, i) => {
+              if (!msg) return null;
+              return (
+                <div key={i}>
+                  {msg.sender === 'ai'         && <AiBubble content={msg.content} category={msg.category} />}
+                  {msg.sender === 'human'      && <UserBubble content={msg.content} />}
+                  {msg.sender === 'evaluation' && <EvaluationBox content={msg.content} />}
+                </div>
+              );
+            })}
+            {isLoading && <TypingIndicator />}
+            <div ref={messagesEndRef} />
           </div>
         </div>
-      )}
 
-      {/* 입력 영역 – 완료시 숨김 */}
-      {isCompleted ? (
-        <div className="bg-green-50 border-t border-green-200">
-          <div className="max-w-4xl mx-auto px-4 py-6 text-center space-y-3">
-            <p className="text-green-700 font-semibold">🎉 면접이 완료되었습니다. 수고하셨습니다!</p>
-            <p className="text-xs text-gray-400">AI가 결과를 분석 중입니다. 리포트 생성까지 최대 1분 소요될 수 있습니다.</p>
-            <div className="flex justify-center gap-3 pt-1">
-              <button
-                onClick={() => navigate(`/report/${sessionId}`)}
-                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors shadow"
-              >
-                📊 결과 리포트 보기
-              </button>
-              <button onClick={() => navigate('/')}
-                className="px-5 py-2.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
-                처음으로 돌아가기
-              </button>
+        {/* Error banner */}
+        {error && messages.length > 0 && (
+          <div className="px-5 py-2 flex-shrink-0">
+            <div className="flex items-center space-x-2 bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg text-sm">
+              <span className="flex-1">{error}</span>
+              <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">✕</button>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="bg-white border-t border-gray-200 shadow-lg">
-          <div className="max-w-4xl mx-auto px-4 py-4">
-            <form onSubmit={handleSend} className="flex items-end space-x-3">
-              <textarea
-                value={inputValue}
-                onChange={e => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="답변을 입력하세요... (Enter: 전송 / Shift+Enter: 줄바꿈)"
-                rows={3}
-                className="flex-1 resize-none px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-xl
-                           focus:ring-2 focus:ring-blue-500 focus:border-transparent
-                           placeholder-gray-400 text-sm leading-relaxed"
-                disabled={isLoading}
-              />
-              <button
-                type="submit"
-                disabled={isLoading || !inputValue.trim()}
-                className="flex-shrink-0 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold
-                           rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-                </svg>
-              </button>
-            </form>
-            <p className="text-xs text-gray-400 mt-1.5 ml-1">Enter: 전송 · Shift+Enter: 줄바꿈</p>
-          </div>
-        </div>
-      )}
+        )}
 
+        {/* Input area */}
+        <div className="flex-shrink-0 bg-white border-t border-gray-200">
+          {isCompleted ? (
+            <div className="bg-green-50 px-5 py-5 text-center space-y-3">
+              <p className="text-green-700 font-semibold">🎉 면접이 완료되었습니다. 수고하셨습니다!</p>
+              <p className="text-xs text-gray-400">AI가 결과를 분석 중입니다. 리포트 생성까지 최대 1분 소요될 수 있습니다.</p>
+              <div className="flex justify-center gap-3 pt-1">
+                <button onClick={() => navigate(`/report/${sessionId}`)}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-colors shadow">
+                  📊 결과 리포트 보기
+                </button>
+                <button onClick={() => navigate('/')}
+                  className="px-5 py-2.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+                  처음으로 돌아가기
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="px-4 py-3">
+              <form onSubmit={handleSend} className="flex items-end space-x-2">
+                <MicButton onResult={handleSpeechResult} disabled={isLoading} />
+                <textarea
+                  value={inputValue}
+                  onChange={e => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="답변을 입력하거나 마이크를 사용하세요... (Enter: 전송 / Shift+Enter: 줄바꿈)"
+                  rows={3}
+                  className="flex-1 resize-none px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400 text-sm leading-relaxed"
+                  disabled={isLoading}
+                />
+                <button type="submit" disabled={isLoading || !inputValue.trim()}
+                  className="flex-shrink-0 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                  </svg>
+                </button>
+              </form>
+              <div className="flex items-center justify-between mt-1.5 ml-1">
+                <p className="text-xs text-gray-400">Enter: 전송 · Shift+Enter: 줄바꿈</p>
+                <div className="flex items-center space-x-2 text-xs text-gray-400">
+                  {cameraActive && <span>📷 {Object.values(emotionStats || {}).reduce((a, b) => a + b, 0)}개 감정 분석됨</span>}
+                  {(window.SpeechRecognition || window.webkitSpeechRecognition) && <span>🎤 음성 입력 가능</span>}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

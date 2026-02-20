@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -23,17 +23,30 @@ export default function InterviewSetup() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
-  const [userId, setUserId]         = useState(2);
-  const [jobId, setJobId]           = useState(1);
-  const [resumeFile, setResumeFile] = useState(null);   // File object
-  const [loading, setLoading]       = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState('');
-  const [toast, setToast]           = useState('');
+  const [userId, setUserId]           = useState(2);
+  const [jobId, setJobId]             = useState('');
+  const [jobs, setJobs]               = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [resumeFile, setResumeFile]   = useState(null);
+  const [loading, setLoading]         = useState(false);
+  const [loadingMsg, setLoadingMsg]   = useState('');
+  const [toast, setToast]             = useState('');
 
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 5000);
   };
+
+  /* JD 목록 가져오기 */
+  useEffect(() => {
+    axios.get(`${API_BASE_URL}/api/admin/jobs`)
+      .then(({ data }) => {
+        setJobs(data);
+        if (data.length > 0) setJobId(String(data[0].id));
+      })
+      .catch(() => showToast('공고 목록을 불러오지 못했습니다. 관리자에게 문의하세요.'))
+      .finally(() => setJobsLoading(false));
+  }, []);
 
   /* 파일 선택 핸들러 */
   const handleFileChange = (e) => {
@@ -50,10 +63,10 @@ export default function InterviewSetup() {
   const handleStart = async (e) => {
     e.preventDefault();
     setToast('');
+    if (!jobId) { showToast('지원할 공고를 선택해 주세요.'); return; }
     setLoading(true);
 
     try {
-      // multipart/form-data
       const formData = new FormData();
       formData.append('user_id', parseInt(userId, 10));
       formData.append('job_id',  parseInt(jobId,  10));
@@ -67,10 +80,7 @@ export default function InterviewSetup() {
       const { data } = await axios.post(
         `${API_BASE_URL}/api/interview/start`,
         formData,
-        {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          timeout: 60000  // PDF 파싱은 최대 60초 허용
-        }
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }
       );
       navigate(`/interview/${data.session_id}`);
     } catch (err) {
@@ -91,7 +101,6 @@ export default function InterviewSetup() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-
       {toast && <Toast message={toast} onClose={() => setToast('')} />}
 
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
@@ -125,19 +134,34 @@ export default function InterviewSetup() {
             <p className="mt-1 text-xs text-gray-400">기본값: 2 (Kim Developer)</p>
           </div>
 
-          {/* Job ID */}
+          {/* Job Select — fetched from /api/admin/jobs */}
           <div>
-            <label htmlFor="jobId" className="block text-sm font-medium text-gray-700 mb-1.5">
-              공고 ID
+            <label htmlFor="jobSelect" className="block text-sm font-medium text-gray-700 mb-1.5">
+              지원 공고 선택
             </label>
-            <input
-              type="number" id="jobId" value={jobId} min="1" required
-              onChange={e => setJobId(e.target.value)}
-              className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg
-                         focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-gray-400"
-              placeholder="1"
-            />
-            <p className="mt-1 text-xs text-gray-400">기본값: 1 (Python Backend Developer)</p>
+            {jobsLoading ? (
+              <div className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-400 text-sm animate-pulse">
+                공고 목록 불러오는 중...
+              </div>
+            ) : jobs.length === 0 ? (
+              <div className="w-full px-4 py-3 border border-red-200 rounded-lg bg-red-50 text-red-500 text-sm">
+                등록된 공고가 없습니다.{' '}
+                <a href="/admin" className="underline font-semibold">관리자 페이지</a>에서 먼저 공고를 등록해 주세요.
+              </div>
+            ) : (
+              <select
+                id="jobSelect"
+                value={jobId}
+                onChange={e => setJobId(e.target.value)}
+                required
+                className="w-full px-4 py-3 bg-white text-gray-900 border border-gray-300 rounded-lg
+                           focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {jobs.map(j => (
+                  <option key={j.id} value={j.id}>#{j.id} — {j.title}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* PDF Resume Upload */}
@@ -161,10 +185,8 @@ export default function InterviewSetup() {
                 className="hidden"
                 onChange={handleFileChange}
               />
-
               {resumeFile ? (
                 <div className="flex items-center justify-center space-x-2">
-                  {/* PDF Icon */}
                   <svg className="w-6 h-6 text-red-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd"/>
                   </svg>
@@ -176,9 +198,7 @@ export default function InterviewSetup() {
                     type="button"
                     onClick={(e) => { e.stopPropagation(); setResumeFile(null); fileInputRef.current.value = ''; }}
                     className="ml-auto text-gray-400 hover:text-red-500 transition-colors"
-                  >
-                    ✕
-                  </button>
+                  >✕</button>
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -195,7 +215,7 @@ export default function InterviewSetup() {
 
           {/* 시작 버튼 */}
           <button
-            type="submit" disabled={loading}
+            type="submit" disabled={loading || jobsLoading || jobs.length === 0}
             className="w-full bg-blue-600 hover:bg-blue-700 active:scale-95
                        text-white font-semibold py-3.5 px-6 rounded-xl
                        transition-all duration-150 shadow-lg
@@ -214,9 +234,10 @@ export default function InterviewSetup() {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-gray-400">
-          Powered by FastAPI · React · pgvector
-        </p>
+        <div className="mt-6 flex justify-between items-center">
+          <p className="text-xs text-gray-400">Powered by FastAPI · React · pgvector</p>
+          <a href="/admin" className="text-xs text-blue-500 hover:text-blue-700 underline">관리자 →</a>
+        </div>
       </div>
     </div>
   );

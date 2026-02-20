@@ -17,9 +17,32 @@ from database import get_db
 from models import InterviewSession, Transcript, User, JobPosting, SessionStatus, EvaluationReport
 from app.services.ai_service import get_ai_service, generate_final_report
 
-# Upload directory for resumes
+# Upload directories
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+AUDIO_DIR = Path("uploads/audio")
+AUDIO_DIR.mkdir(exist_ok=True)
+
+
+def generate_tts(text: str, session_id: int, turn: int) -> Optional[str]:
+    """
+    Generate a Korean TTS MP3 using gTTS and return the static URL.
+    Returns None silently if gTTS is not installed or generation fails.
+    """
+    try:
+        from gtts import gTTS
+        filename = f"session_{session_id}_turn_{turn}.mp3"
+        filepath = AUDIO_DIR / filename
+        tts = gTTS(text=text, lang="ko", slow=False)
+        tts.save(str(filepath))
+        print(f"[TTS] Saved {filepath}")
+        return f"/static/audio/{filename}"
+    except ImportError:
+        print("[TTS] gTTS not installed — skipping audio generation")
+        return None
+    except Exception as e:
+        print(f"[TTS] Error: {e}")
+        return None
 
 
 def parse_pdf(file_path: str) -> str:
@@ -71,6 +94,7 @@ class ChatRequest(BaseModel):
     """Schema for chat interaction"""
     session_id: int = Field(..., description="Interview session ID")
     user_answer: Optional[str] = Field(None, description="User's answer to previous question")
+    vision_data: Optional[Dict[str, Any]] = Field(None, description="Emotion percentages from webcam analysis e.g. {neutral: 50, happy: 30}")
     
     class Config:
         json_schema_extra = {
@@ -87,6 +111,7 @@ class ChatResponse(BaseModel):
     next_question: str = Field(..., description="Next interview question")
     question_id: Optional[int] = Field(None, description="ID of the question (None for self-intro)")
     category: str = Field(..., description="Question category")
+    audio_url: Optional[str] = Field(None, description="TTS audio URL for next_question")
 
 
 class TranscriptItem(BaseModel):
@@ -229,9 +254,11 @@ async def chat(
     
     # If user provided an answer, evaluate it
     if request.user_answer:
-        # Save user's answer to transcript first
-        db.add(Transcript(session_id=session.id, sender="human", content=request.user_answer))
+        # Save user's answer to transcript first (score=None until evaluated)
+        human_tx = Transcript(session_id=session.id, sender="human", content=request.user_answer)
+        db.add(human_tx)
         db.commit()
+        db.refresh(human_tx)  # get the new row's id
 
         # Count human turns to detect final turn (turn 7 = answer to closing question)
         human_turn_count = db.query(Transcript).filter(
@@ -245,16 +272,22 @@ async def chat(
             db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
             session.status = SessionStatus.COMPLETED
             db.commit()
-            # Generate final report (best-effort, won't block response)
+            # Generate final report with vision data (best-effort, won't block response)
             try:
-                generate_final_report(session_id=session.id, db=db)
+                generate_final_report(
+                    session_id=session.id,
+                    db=db,
+                    vision_data=request.vision_data
+                )
             except Exception as report_err:
                 print(f"[REPORT] Non-blocking error: {report_err}")
+            audio_url = generate_tts(goodbye, session.id, human_turn_count)
             return ChatResponse(
                 evaluation=None,
                 next_question=goodbye,
                 question_id=None,
-                category="CLOSING / 면접 종료"
+                category="CLOSING / 면접 종료",
+                audio_url=audio_url
             )
 
         # Normal evaluation for turns 1-6
@@ -271,6 +304,10 @@ async def chat(
                 user_answer=request.user_answer,
                 job_context=job_context
             )
+            # ── Persist the turn score to the transcript row ─────────────────
+            if evaluation and evaluation.get("score") is not None:
+                human_tx.score = int(evaluation["score"])
+                db.commit()
 
     # Get history of asked questions by extracting question_ids from transcript
     asked_transcripts = db.query(Transcript).filter(
@@ -299,11 +336,14 @@ async def chat(
         db.add(Transcript(session_id=session.id, sender="ai", content=next_question_obj.question_text))
         # Do NOT set COMPLETED yet — user still needs to reply
         db.commit()
+        turn_n = db.query(Transcript).filter(Transcript.session_id == session.id, Transcript.sender == "ai").count()
+        audio_url = generate_tts(next_question_obj.question_text, session.id, turn_n)
         return ChatResponse(
             evaluation=evaluation,
             next_question=next_question_obj.question_text,
             question_id=None,
-            category="CLOSING / 마무리"
+            category="CLOSING / 마무리",
+            audio_url=audio_url
         )
 
     # ── No question found ────────────────────────────────────────────────────
@@ -312,11 +352,14 @@ async def chat(
         db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
         session.status = SessionStatus.COMPLETED
         db.commit()
+        turn_n = db.query(Transcript).filter(Transcript.session_id == session.id, Transcript.sender == "ai").count()
+        audio_url = generate_tts(goodbye, session.id, turn_n)
         return ChatResponse(
             evaluation=evaluation,
             next_question=goodbye,
             question_id=None,
-            category="CLOSING / 마무리"
+            category="CLOSING / 마무리",
+            audio_url=audio_url
         )
 
     # ── Normal question flow ─────────────────────────────────────────────────
@@ -330,11 +373,14 @@ async def chat(
     db.add(ai_transcript)
     db.commit()
 
+    turn_n = db.query(Transcript).filter(Transcript.session_id == session.id, Transcript.sender == "ai").count()
+    audio_url = generate_tts(next_question_obj.question_text, session.id, turn_n)
     return ChatResponse(
         evaluation=evaluation,
         next_question=next_question_obj.question_text,
         question_id=next_question_obj.id,
-        category=f"{next_question_obj.category} / {next_question_obj.sub_category or ''}"
+        category=f"{next_question_obj.category} / {next_question_obj.sub_category or ''}",
+        audio_url=audio_url
     )
 
 
@@ -376,6 +422,34 @@ async def get_session(
             timestamp=t.timestamp
         ) for t in transcripts]
     )
+
+
+@router.get("/session/{session_id}/transcript", response_model=List[TranscriptItem])
+async def get_transcript(
+    session_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the transcript for an interview session.
+    Returns an empty list [] for new sessions with no messages yet.
+    Never returns 404 — an empty transcript is a valid state.
+    """
+    # Verify the session exists first
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == session_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+
+    transcripts = db.query(Transcript).filter(
+        Transcript.session_id == session_id
+    ).order_by(Transcript.timestamp.asc()).all()
+
+    # Return empty list for brand-new sessions — this is correct REST behaviour
+    return [TranscriptItem(sender=t.sender, content=t.content, timestamp=t.timestamp)
+            for t in transcripts]
+
+
 
 
 @router.post("/session/{session_id}/end")

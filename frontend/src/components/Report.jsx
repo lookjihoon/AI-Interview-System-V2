@@ -10,10 +10,11 @@ const API_BASE_URL = 'http://localhost:8000';
 
 /* ── Score Ring ──────────────────────────────────────────────────────────── */
 function ScoreRing({ score }) {
+  const s = Number(score) || 0;
   const r = 54;
   const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
-  const color = score >= 80 ? '#22c55e' : score >= 60 ? '#3b82f6' : score >= 40 ? '#f59e0b' : '#ef4444';
+  const dash = (s / 100) * circ;
+  const color = s >= 80 ? '#22c55e' : s >= 60 ? '#3b82f6' : s >= 40 ? '#f59e0b' : '#ef4444';
 
   return (
     <div className="flex flex-col items-center">
@@ -27,7 +28,7 @@ function ScoreRing({ score }) {
           transform="rotate(-90 70 70)"
           style={{ transition: 'stroke-dasharray 1s ease' }}
         />
-        <text x="70" y="65" textAnchor="middle" fill="#111827" fontSize="28" fontWeight="bold">{score}</text>
+        <text x="70" y="65" textAnchor="middle" fill="#111827" fontSize="28" fontWeight="bold">{s}</text>
         <text x="70" y="85" textAnchor="middle" fill="#6b7280" fontSize="12">/ 100</text>
       </svg>
       <p className="text-sm font-semibold text-gray-600 mt-1">종합 점수</p>
@@ -37,17 +38,17 @@ function ScoreRing({ score }) {
 
 /* ── Score Badge ─────────────────────────────────────────────────────────── */
 function ScoreBadge({ label, score, color }) {
-  const bar = { '--w': `${score}%` };
+  const s = Number(score) || 0;
   return (
     <div>
       <div className="flex justify-between mb-1">
         <span className="text-sm font-medium text-gray-700">{label}</span>
-        <span className="text-sm font-bold" style={{ color }}>{score}점</span>
+        <span className="text-sm font-bold" style={{ color }}>{s}점</span>
       </div>
       <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
         <div
           className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${score}%`, backgroundColor: color }}
+          style={{ width: `${s}%`, backgroundColor: color }}
         />
       </div>
     </div>
@@ -57,15 +58,32 @@ function ScoreBadge({ label, score, color }) {
 /* ── Detail Card ─────────────────────────────────────────────────────────── */
 function DetailCard({ icon, title, content, accent }) {
   return (
-    <div className={`bg-white rounded-xl border-l-4 p-5 shadow-sm`} style={{ borderLeftColor: accent }}>
+    <div className="bg-white rounded-xl border-l-4 p-5 shadow-sm" style={{ borderLeftColor: accent }}>
       <div className="flex items-center space-x-2 mb-2">
         <span className="text-xl">{icon}</span>
         <h3 className="font-semibold text-gray-800 text-sm">{title}</h3>
       </div>
-      <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">{content || '—'}</p>
+      <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
+        {content || '—'}
+      </p>
     </div>
   );
 }
+
+/* ── Raw JSON Fallback ───────────────────────────────────────────────────── */
+function RawFallback({ data }) {
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mt-4">
+      <p className="text-amber-700 font-semibold text-sm mb-2">⚠️ 일부 데이터가 예상 형식과 다릅니다. 원본 평가 결과:</p>
+      <pre className="text-xs text-gray-600 whitespace-pre-wrap overflow-auto max-h-64">
+        {JSON.stringify(data, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
+/* ── Safe number helper ──────────────────────────────────────────────────── */
+const safeNum = (v) => Math.max(0, Math.min(100, Number(v) || 0));
 
 /* ── Main Report ─────────────────────────────────────────────────────────── */
 export default function Report() {
@@ -75,6 +93,7 @@ export default function Report() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retries, setRetries] = useState(0);
+  const [parseError, setParseError] = useState(false);
 
   useEffect(() => {
     let timer;
@@ -83,11 +102,20 @@ export default function Report() {
         const { data } = await axios.get(
           `${API_BASE_URL}/api/interview/session/${sessionId}/report`
         );
-        setReport(data);
+        // Validate essential keys exist
+        if (data && typeof data === 'object') {
+          setReport(data);
+          // Flag if key structure is unexpected
+          if (data.tech_score === undefined && data.total_score === undefined) {
+            setParseError(true);
+          }
+        } else {
+          setParseError(true);
+          setReport(data);
+        }
         setLoading(false);
       } catch (err) {
         if (err?.response?.status === 404 && retries < 6) {
-          // Report may still be generating — retry up to 6 times (30 s total)
           timer = setTimeout(() => setRetries(r => r + 1), 5000);
         } else {
           setError(err?.response?.data?.detail ?? '리포트를 불러오지 못했습니다.');
@@ -99,12 +127,24 @@ export default function Report() {
     return () => clearTimeout(timer);
   }, [sessionId, retries]);
 
-  /* ── Radar data ── */
+  /* ── Derived values — all guarded with ?. and || 0 ── */
+  const techScore    = safeNum(report?.tech_score);
+  const commScore    = safeNum(report?.communication_score);
+  const probScore    = safeNum(report?.problem_solving_score);
+  const nvScore      = safeNum(report?.non_verbal_score ?? report?.details?.non_verbal_score);
+  const totalScore   = safeNum(report?.total_score ?? Math.round((techScore + commScore + probScore) / 3));
+  const summary      = report?.summary || '';
+  const details      = report?.details ?? {};
+  const strengths    = details?.strengths || details?.strength || '';
+  const weaknesses   = details?.weaknesses || details?.weakness || details?.improvements || '';
+  const jdFit        = details?.jd_fit || details?.jd_fit_assessment || details?.fit || '';
+
   const radarData = report
     ? [
-        { subject: '직무역량',    score: report.tech_score ?? 0 },
-        { subject: '의사소통',    score: report.communication_score ?? 0 },
-        { subject: '문제해결력',  score: report.problem_solving_score ?? 0 },
+        { subject: '직무역량',   score: techScore },
+        { subject: '의사소통',   score: commScore },
+        { subject: '문제해결력', score: probScore },
+        { subject: '면접 태도',  score: nvScore   },
       ]
     : [];
 
@@ -126,7 +166,7 @@ export default function Report() {
     );
   }
 
-  /* ── Error ── */
+  /* ── Fetch Error ── */
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -143,7 +183,21 @@ export default function Report() {
     );
   }
 
-  const details = report?.details ?? {};
+  /* ── No report data guard ── */
+  if (!report) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow p-8 max-w-md text-center space-y-4">
+          <div className="text-5xl">📄</div>
+          <p className="text-gray-600 text-sm">데이터 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.</p>
+          <button onClick={() => navigate('/')}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm">
+            처음으로
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
@@ -164,18 +218,22 @@ export default function Report() {
 
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-8">
 
+        {/* Parse warning banner */}
+        {parseError && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-700 text-sm">
+            ⚠️ AI 리포트 형식이 일부 예상과 다릅니다. 가능한 데이터를 표시합니다.
+          </div>
+        )}
+
         {/* Score Overview */}
         <section className="bg-white rounded-2xl shadow-sm p-8">
           <div className="flex flex-col md:flex-row items-center gap-10">
-
-            {/* Ring */}
-            <ScoreRing score={report.total_score ?? 0} />
-
-            {/* Bars + Radar */}
+            <ScoreRing score={totalScore} />
             <div className="flex-1 w-full space-y-4">
-              <ScoreBadge label="직무역량 (Hard Skill)"   score={report.tech_score ?? 0}               color="#3b82f6" />
-              <ScoreBadge label="의사소통 (Communication)"  score={report.communication_score ?? 0}      color="#8b5cf6" />
-              <ScoreBadge label="문제해결력 (Problem Solving)" score={report.problem_solving_score ?? 0} color="#10b981" />
+              <ScoreBadge label="직무역량 (Hard Skill)"        score={techScore}  color="#3b82f6" />
+              <ScoreBadge label="의사소통 (Communication)"     score={commScore}  color="#8b5cf6" />
+              <ScoreBadge label="문제해결력 (Problem Solving)"  score={probScore}  color="#10b981" />
+              <ScoreBadge label="면접 태도 (Non-verbal)"        score={nvScore}    color="#f59e0b" />
             </div>
           </div>
         </section>
@@ -208,28 +266,24 @@ export default function Report() {
         </section>
 
         {/* Summary */}
-        {report.summary && (
+        {summary && (
           <section className="bg-blue-600 text-white rounded-2xl shadow-sm p-6">
             <h2 className="text-sm font-semibold uppercase tracking-wider opacity-75 mb-2">종합 평가</h2>
-            <p className="text-lg leading-relaxed font-medium">{report.summary}</p>
+            <p className="text-lg leading-relaxed font-medium">{summary}</p>
           </section>
         )}
 
         {/* Detail Cards */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <DetailCard
-            icon="💪" title="강점 (Strengths)"
-            content={details.strengths} accent="#22c55e"
-          />
-          <DetailCard
-            icon="📈" title="개선점 (Weaknesses)"
-            content={details.weaknesses} accent="#f59e0b"
-          />
-          <DetailCard
-            icon="🎯" title="직무 적합도 (JD Fit)"
-            content={details.jd_fit} accent="#3b82f6"
-          />
+          <DetailCard icon="💪" title="강점 (Strengths)"        content={strengths}  accent="#22c55e" />
+          <DetailCard icon="📈" title="개선점 (Weaknesses)"     content={weaknesses} accent="#f59e0b" />
+          <DetailCard icon="🎯" title="직무 적합도 (JD Fit)"    content={jdFit}      accent="#3b82f6" />
         </section>
+
+        {/* Raw JSON fallback — only shows if parse error AND no structured data */}
+        {parseError && !strengths && !weaknesses && (
+          <RawFallback data={report} />
+        )}
 
         {/* Footer */}
         <div className="text-center text-xs text-gray-400 pb-4">

@@ -52,29 +52,29 @@ class InterviewAI:
     def __init__(self):
         """Initialize LLM and embedding models"""
         self.llm = ChatOllama(
-            model="llama3.1",
+            model="exaone3.5",
             temperature=0.1,
             num_predict=768,
             format="json"
         )
         # Text-only LLM for question rewriting (no JSON constraint)
         self.llm_text = ChatOllama(
-            model="llama3.1",
+            model="exaone3.5",
             temperature=0.2,
             num_predict=200,
         )
-        # Dedicated evaluation LLM — temperature=0.2 for stable, grounded scoring
-        # (0.0 can cause repetition loops in Llama 3.1; 0.2 is the sweet spot)
+        # Dedicated evaluation LLM — temperature=0.4: sweet spot for Korean JSON with Llama 3.1 8B
+        # (0.1 causes token stuttering/loop on Korean; 0.4 keeps outputs stable + readable)
         self.llm_eval = ChatOllama(
-            model="llama3.1",
-            temperature=0.2,
+            model="exaone3.5",
+            temperature=0.4,
             num_predict=512,
             format="json"
         )
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-mpnet-base-v2"
         )
-        print("✓ InterviewAI initialized (llama3.1 + all-mpnet-base-v2)")
+        print("✓ InterviewAI initialized (exaone3.5 + all-mpnet-base-v2)")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Phase Detection
@@ -93,6 +93,76 @@ class InterviewAI:
             Transcript.sender == "human"
         ).count()
         return human_turns  # 0 = never answered anything (first AI question)
+
+    def _get_asked_questions(self, session_id: int, db: Session) -> List[str]:
+        """Return list of AI question texts already asked this session (for anti-repetition)."""
+        rows = db.query(Transcript).filter(
+            Transcript.session_id == session_id,
+            Transcript.sender == "ai",
+            Transcript.question_id.isnot(None)  # only real RAG questions, not greetings
+        ).order_by(Transcript.id.asc()).all()
+        return [r.content for r in rows]
+
+    def _generate_behavioral_question(self, turn: int, last_answer: str, resume_text: Optional[str]) -> str:
+        """
+        For Turn 4: ask a fixed team-project behavioral question.
+        For Turn 5: generate an LLM follow-up on the candidate's last answer.
+        Falls back to a hardcoded question on error.
+        """
+        resume_snippet = ""
+        if resume_text:
+            lines = [l.strip() for l in resume_text.splitlines() if l.strip()][:5]
+            resume_snippet = " ".join(lines)
+
+        if turn == 4:
+            prompt = (
+                "[SYSTEM] You are a professional Korean interviewer conducting a behavioral interview.\n"
+                "Generate EXACTLY ONE behavioral interview question IN KOREAN that asks about:\n"
+                "  - Team project experience\n"
+                "  - The candidate's role in the team\n"
+                "  - The most difficult challenge encountered and how they resolved it\n"
+                f"Candidate resume summary: {resume_snippet or '(not provided)'}\n"
+                "STRICT FORMAT RULE: End your question with a single proper Korean question ending such as "
+                "'~하셨나요?', '~인가요?', '~있으신가요?', or '~주시겠어요?'.\n"
+                "DO NOT append extra words or '~요.' after the question mark. Output ONLY the question sentence."
+            )
+            fallback = (
+                "이력서를 바탕으로 말씀해 주시겠어요? 팀 프로젝트 경험 중 "
+                "가장 어렵거나 갈등이 있었던 상황을, 본인이 어떤 역할을 맡아 어떻게 해결했는지 "
+                "구체적으로 설명해 주시겠어요?"
+            )
+        else:  # turn == 5 — follow-up
+            prompt = (
+                "[SYSTEM] You are a professional Korean interviewer.\n"
+                "The candidate just answered a question about their team project and problem-solving experience.\n"
+                f"Their answer: {last_answer[:300] if last_answer else '(no answer yet)'}\n"
+                "Generate EXACTLY ONE follow-up question IN KOREAN that:\n"
+                "  - Digs deeper into the specific process, decision, or lesson learned\n"
+                "  - Does NOT repeat, rephrase, or re-ask the same question\n"
+                "STRICT FORMAT RULE: End your question with a single proper Korean question ending such as "
+                "'~하셨나요?', '~인가요?', '~있으신가요?', or '~주시겠어요?'.\n"
+                "DO NOT append extra words or '~요.' after the question mark. Output ONLY the question sentence."
+            )
+            fallback = (
+                "방금 말씀하신 경험에서 가장 인상 깊었던 배움이나, "
+                "그 이후 유사한 상황에서 어떻게 다르게 접근하셨는지 구체적으로 말씀해 주시겠어요?"
+            )
+
+        try:
+            response = self.llm_text.invoke([HumanMessage(content=prompt)])
+            q = response.content.strip()
+            # Post-process: strip any trailing '~요.' duplicate suffix
+            # e.g. '...주시겠어요?요.' -> '...주시겠어요?'
+            q = q.rstrip()
+            if q.endswith('요.') and '?' in q:
+                q = q[: q.rfind('?') + 1]
+            # Must be Korean, reasonably long, end with ? or proper Korean ending
+            if len(q) > 15 and any(c in q for c in ['?', '요', '까']):
+                print(f"[BEHAVIORAL] Turn {turn} LLM question: {q[:80]}")
+                return q
+        except Exception as e:
+            print(f"[BEHAVIORAL] LLM error: {e}")
+        return fallback
 
     def _get_last_human_answer(self, session_id: int, db: Session) -> str:
         """Return the most recent human transcript content, or empty string."""
@@ -163,7 +233,9 @@ class InterviewAI:
         self,
         base_question: str,
         last_answer: str,
-        session_resume_text: Optional[str] = None
+        session_resume_text: Optional[str] = None,
+        job_requirements: Optional[str] = None,
+        asked_questions: Optional[List[str]] = None
     ) -> str:
         """
         Rewrite the fetched question so it naturally references the candidate's
@@ -214,6 +286,21 @@ class InterviewAI:
 [기본 질문] {base_question}
 [지원자 이전 답변] {last_answer[:200]}
 [이력서 원문] {resume_preview if resume_preview else '(이력서 없음)'}
+[JD 자격 요건] {job_requirements[:300] if job_requirements else '(없음)'}
+[이전 질문 목록 — 절대 반복 금지]
+{chr(10).join(f'  - {q[:100]}' for q in (asked_questions or [])) or '  (없음)'}
+
+[ANTI-REPETITION RULE - CRITICAL]
+- Look at [이전 질문 목록] above.
+- DO NOT ask about a topic or technology that has already been asked.
+- DO NOT rephrase or restate any of the previous questions.
+- If the base question is too similar to a previous one, change the topic angle entirely.
+
+[SEMANTIC ANTI-REPETITION — CRITICAL]
+- Even if the BASE QUESTION uses different wording, if the CONCEPT is the same as any previous question, you MUST refuse it and generate a question about a COMPLETELY DIFFERENT topic.
+- Example: if "MSA Saga pattern" was already asked, do NOT ask about "distributed transaction", "eventual consistency", or any other MSA sub-topic.
+- To determine if two questions are conceptually similar, ask: "Would answering one question also answer the other?" If YES, they are too similar.
+- Pick a topic from the RESUME or JD that has NOT been covered yet.
 
 질문:"""
 
@@ -321,10 +408,27 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
         last_answer    = self._get_last_human_answer(session_id, db) if session_id else ""
         force_behavioral = turn in PHASE3_TURNS
 
+        # ── Phase 3 (Turn 4 & 5): LLM-generated behavioral questions — bypass RAG ──
+        if turn in (4, 5):
+            print(f"[Phase] → Phase 3 BEHAVIORAL (LLM-generated, turn={turn})")
+            dummy = QuestionBank()
+            dummy.id = None  # Not a RAG question
+            dummy.question_text = self._generate_behavioral_question(
+                turn=turn,
+                last_answer=last_answer,
+                resume_text=session_resume_text
+            )
+            dummy.category = "BEHAVIORAL"
+            dummy.sub_category = "팀 프로젝트 / 인성"
+            return dummy
+
         if force_behavioral:
-            print("[Phase] → Phase 3 BEHAVIORAL")
+            print("[Phase] → Phase 3 BEHAVIORAL (RAG fallback)")
         else:
             print(f"[Phase] → Phase 2 TECHNICAL (turn {turn})")
+
+        # Collect previously asked question texts for anti-repetition
+        asked_questions = self._get_asked_questions(session_id, db) if session_id else []
 
         # Smart focused query
         query_text = self._build_rag_query(
@@ -338,12 +442,25 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
         query_embedding = self.embeddings.embed_query(query_text)
 
         # Build SQL: exclude asked IDs
+        # Primary: IDs passed in from the router's history tracking
         real_history = [qid for qid in history_ids if qid and qid > 0]
+        # Secondary: also query all question_ids from this session's transcripts (DB-level hard dedup)
+        if session_id:
+            db_used = db.query(Transcript.question_id).filter(
+                Transcript.session_id == session_id,
+                Transcript.question_id.isnot(None)
+            ).all()
+            db_used_ids = [row[0] for row in db_used if row[0]]
+            # Merge both lists; set removes duplicates
+            all_exclude = list(set(real_history + db_used_ids))
+        else:
+            all_exclude = real_history
+
         stmt = select(QuestionBank).order_by(
             QuestionBank.embedding.cosine_distance(query_embedding)
         )
-        if real_history:
-            stmt = stmt.where(QuestionBank.id.notin_(real_history))
+        if all_exclude:
+            stmt = stmt.where(QuestionBank.id.notin_(all_exclude))
 
         # Phase 3: force behavioral category filter
         if force_behavioral:
@@ -355,11 +472,13 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
 
         if result:
             print(f"[RAG] Fetched: [{result.category}] {result.question_text[:80]}")
-            # Personalise using last answer / resume
+            # Personalise using last answer / resume / JD requirements + anti-repeat history
             result.question_text = self._personalise_question(
                 base_question=result.question_text,
                 last_answer=last_answer,
-                session_resume_text=session_resume_text
+                session_resume_text=session_resume_text,
+                job_requirements=job.requirements,
+                asked_questions=asked_questions
             )
         else:
             print("[RAG] No suitable question found")
@@ -377,76 +496,58 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
     ) -> Dict[str, Any]:
         """Evaluate user's answer against Rubric_Detail.md criteria."""
 
-        # ── Fail-safe: bypass LLM entirely for clearly invalid answers ─────────
-        answer_lower = user_answer.strip().lower()
+        # ── Pre-LLM Python Guardrail (rule-based, never hallucinates) ───────────
+        _stripped = user_answer.strip()
+        _GIVEUP_KEYWORDS = ["모르겠", "기억나지", "없습니다", "잘 모르", "모릅니다", "패스", "pass"]
         if (
-            len(user_answer.strip()) < 8
-            or any(p in answer_lower for p in self._FAILSAFE_PATTERNS)
+            len(_stripped) < 30
+            or any(kw in _stripped for kw in _GIVEUP_KEYWORDS)
         ):
-            print(f"[EVAL] Fail-safe triggered for short/unknown answer")
+            print(f"[EVAL] Guardrail triggered (len={len(_stripped)}) — returning fixed score")
+            return {
+                "score": 15,
+                "feedback": (
+                    "답변이 너무 짧거나 핵심 내용이 포함되지 않았습니다. "
+                    "직무 역량을 어필할 수 있는 구체적인 경험을 덧붙여주세요."
+                ),
+                "follow_up_question": (
+                    "관련하여 조금이라도 알고 계신 부분이나, "
+                    "유사한 경험이 있다면 말씀해 주시겠어요?"
+                ),
+            }
+
+        # ── Legacy keyword fail-safe (very short / known surrender phrases) ──────
+        answer_lower = _stripped.lower()
+        if any(p in answer_lower for p in self._FAILSAFE_PATTERNS):
+            print(f"[EVAL] Fail-safe triggered for known surrender pattern")
             return dict(self._FAILSAFE_RESULT)
 
         prompt_template = PromptTemplate(
             input_variables=["job_context", "question", "answer"],
-            template="""You are a strict Korean technical interviewer grading a job candidate's answer.
-Follow every rule below without exception.
+            template="""You are a strict Korean technical interviewer. Score the candidate's answer and return ONLY valid JSON.
 
-## SCORING ANCHORS (read carefully before assigning scores)
-- 80-100: Excellent. Candidate gives specific technical examples, discusses trade-offs, uses STAR structure.
-- 60-79:  Average. Mentions correct concepts but lacks depth or concrete real-world examples.
-- 40-59:  Below average. Partially correct, vague, or no structured reasoning.
-- 0-39:   Poor. Answer is irrelevant, technically wrong, or candidate is simply pointing out the AI's mistake.
+Scoring guide (0-100):
+- 80-100: Correct answer WITH specific concrete examples, measurable metrics, explicit trade-offs, AND a clear STAR structure (Situation → Task → Action → Result).
+- 60-79:  Correct concepts but lacks depth, concrete examples, or measurable results.
+- 40-59:  Partially correct or vague reasoning without specifics.
+- 0-39:   Wrong answer, irrelevant content, or just complaining about the question.
 
-## HALLUCINATION CORRECTION RULE
-If the candidate's answer is pointing out that your previous question was based on a false assumption
-(e.g. 'I never mentioned X', 'I did not say that', 'That is not in my resume'),
-then: acknowledge the mistake briefly in the feedback, and evaluate only the technical merit
-of whatever else the candidate said. Do NOT artificially inflate the score to compensate.
-Such responses score 0-39 unless they also provide substantial technical content.
+[CRITICAL SCORING RULES - MUST ENFORCE]
+1. If the answer lacks at least ONE concrete technical example OR measurable metric (e.g., "reduced latency by 30%", "handled 10k RPS"), the MAXIMUM score is 50.
+2. If the STAR structure (Situation, Task, Action, Result) is not clearly present, the MAXIMUM score is 55.
+3. You MUST explicitly state in the feedback what specific examples or metrics are missing.
+4. Never give a score above 60 for vague or generic answers, even if they sound plausible.
+5. If the answer is 'I don't know', gibberish, or a single word: score must be 10-20.
+6. If candidate says your question was wrong/hallucinated: score 0-39, acknowledge briefly in feedback.
 
-## FAIL-SAFE (HIGHEST PRIORITY)
-If the answer is: a single word, pure gibberish, a meta-question about the AI, or a surrender
-(e.g. 'I don't know'), assign score 10-20 regardless of other rules.
+Job context: {job_context}
+Question: {question}
+Answer: {answer}
 
-## RUBRIC — score each dimension 0-100 then compute: score = hard*0.4 + logic*0.3 + comm*0.3
+You MUST output ONLY this JSON structure with EXACTLY these keys. All text values must be in Korean:
+{{"score": 75, "feedback": "피드백 내용을 여기에 한국어로 작성 (부족한 구체적 예시 명시 필필)", "follow_up_question": "한국어 꼬리질문"}}
 
-1. Hard Skill x40%:
-   100 = accurate concept + trade-offs + real example with specifics
-    60 = correct concept, no practical example
-    20 = wrong concept or irrelevant answer
-     0 = no technical content
-
-2. Logic x30%:
-   100 = defines the problem, compares 2+ solutions, reaches optimal choice
-    60 = presents one solution with reasoning
-    20 = vague or illogical
-     0 = no structure
-
-3. Communication (STAR) x30%:
-   100 = Situation -> Task -> Action -> Result, clear and concise
-    60 = has conclusion but not structured
-    20 = long-winded or unclear
-     0 = incoherent
-
-## PENALTIES
-- Minus 20 if no specific numbers, project names, or examples when technically expected.
-- Minus 15 if answer is shorter than 2 full sentences.
-
-## OUTPUT LANGUAGE RULE
-You MUST write the 'feedback' and 'follow_up_question' values in natural, professional KOREAN.
-Do NOT use English in those text values.
-
-## JOB CONTEXT
-{job_context}
-
-## INTERVIEW QUESTION
-{question}
-
-## CANDIDATE ANSWER
-{answer}
-
-## OUTPUT — JSON ONLY, NO OTHER TEXT
-{{"score": <integer 0-100>, "feedback": "<2-3 sentences in Korean. State what was good and what must improve>", "follow_up_question": "<1 Korean follow-up question>"}}""")
+Now output the JSON for the answer above:""")
 
         formatted_prompt = prompt_template.format(
             job_context=job_context[:500],
@@ -504,11 +605,17 @@ def get_ai_service() -> InterviewAI:
     return _ai_service
 
 
-def generate_final_report(session_id: int, db: Session) -> None:
+def generate_final_report(session_id: int, db: Session, vision_data: Optional[Dict[str, Any]] = None) -> None:
     """
     Generate a comprehensive evaluation report for a completed interview session.
-    Fetches all human answers, prompts the LLM to score across 3 rubric dimensions,
-    then persists an EvaluationReport row.
+
+    SCORING STRATEGY (Phase 8.9):
+    - Numerical scores are computed with Python math — LLM cannot inflate them.
+    - avg_turn_score: simple average of all human Transcript.score values.
+    - tech_score / problem_solving_score: derived from avg_turn_score with bias.
+    - non_verbal_score: pure heuristic from vision_data percentages.
+    - communication_score: single LLM-only text-based score (harder to game).
+    - LLM is called ONLY for text fields: summary, strengths, weaknesses, jd_fit, vision_analysis.
     """
     from models import EvaluationReport, InterviewSession, Transcript, JobPosting
 
@@ -528,11 +635,42 @@ def generate_final_report(session_id: int, db: Session) -> None:
     job = db.query(JobPosting).filter(JobPosting.id == session.job_posting_id).first()
     job_title = job.title if job else "Unknown Position"
 
-    # Collect all AI question → Human answer pairs
+    # ── Collect all transcripts ──────────────────────────────────────────────
     transcripts = db.query(Transcript).filter(
         Transcript.session_id == session_id
     ).order_by(Transcript.id.asc()).all()
 
+    # ── MATH: Average turn score from persisted per-turn scores ─────────────
+    scored_turns = [t.score for t in transcripts if t.sender == "human" and t.score is not None]
+    if scored_turns:
+        avg_turn_score = round(sum(scored_turns) / len(scored_turns))
+    else:
+        avg_turn_score = 50  # fallback if no scores were persisted
+    print(f"[REPORT] avg_turn_score={avg_turn_score} from {len(scored_turns)} scored turns: {scored_turns}")
+
+    # ── MATH: Derive component scores from avg ───────────────────────────────
+    # tech_score: weighted toward avg, slightly penalised (technical bar is high)
+    tech_score = max(0, min(100, int(avg_turn_score * 0.95)))
+    # problem_solving_score: same base, slightly harsher penalty for lack of STAR
+    problem_solving_score = max(0, min(100, int(avg_turn_score * 0.90)))
+
+    # ── MATH: Non-verbal score from vision_data ──────────────────────────────
+    vision_summary = "(not provided)"
+    non_verbal_score = 70  # default when no camera data
+    if vision_data and isinstance(vision_data, dict) and vision_data:
+        lines = [f"{k}: {v:.1f}%" for k, v in vision_data.items()]
+        vision_summary = ", ".join(lines)
+        positive_pct = vision_data.get("happy", 0) + vision_data.get("neutral", 0)
+        negative_pct = vision_data.get("fear", 0) + vision_data.get("angry", 0) + vision_data.get("sad", 0)
+        total_pct = positive_pct + negative_pct
+        if total_pct > 0:
+            pos_ratio = positive_pct / total_pct
+        else:
+            pos_ratio = 0.5
+        # 55-90 range: high positive → 90, high negative → 55
+        non_verbal_score = max(0, min(100, int(55 + pos_ratio * 35)))
+
+    # ── Build Q&A text for LLM (text generation only) ────────────────────────
     qa_pairs = []
     last_q = None
     for t in transcripts:
@@ -546,46 +684,39 @@ def generate_final_report(session_id: int, db: Session) -> None:
         print(f"[REPORT] No Q&A pairs found for session {session_id}")
         return
 
-    interview_text = "\n\n".join(qa_pairs[:7])  # Max 7 pairs
+    interview_text = "\n\n".join(qa_pairs[:7])
 
-    prompt = f"""You are a Chief Interviewer writing a final evaluation report in JSON format.
-Evaluate the candidate based ONLY on the Q&A transcript provided below.
-Output ONLY valid JSON — no markdown fences, no explanation, no extra text.
+    # Scored turn breakdown for LLM context
+    score_breakdown = ", ".join(f"Turn {i+1}: {s}" for i, s in enumerate(scored_turns)) or "(none)"
 
-## JOB POSITION
-{job_title}
+    # ── LLM prompt: TEXT FIELDS ONLY, scores pre-computed ───────────────────
+    prompt = f"""You are a Korean interviewer writing a final evaluation report. Return ONLY valid JSON.
 
-## INTERVIEW TRANSCRIPT
+Job position: {job_title}
+Job requirements: {job.requirements[:300] if job and job.requirements else '(none)'}
+
+Interview transcript:
 {interview_text}
 
-## SCORING ANCHORS — apply these strictly
-- 80-100: Excellent. Candidate gives specific technical examples, STAR structure, discusses trade-offs.
-- 60-79:  Average. Correct concepts but lacks depth or concrete examples.
-- 40-59:  Below average. Partially correct, vague, or no structured reasoning.
-- 0-39:   Poor. Irrelevant, wrong, evasive, or candidate only complained about question quality.
+Per-turn scores (already computed, DO NOT change): {score_breakdown}
+Average turn score: {avg_turn_score}/100
+Tech score (pre-computed): {tech_score}/100
+Problem-solving score (pre-computed): {problem_solving_score}/100
+Candidate facial/emotion data: {vision_summary}
 
-## DIMENSIONS TO SCORE (each 0-100, based on the full transcript)
-- tech_score: Accuracy of technical knowledge, depth of expertise, precise terminology.
-- communication_score: Clarity, STAR structure (Situation->Task->Action->Result), conciseness.
-- problem_solving_score: Ability to define problems, compare approaches, reach optimal solutions.
+YOUR ONLY JOB: Write honest Korean text for summary, strengths, weaknesses, jd_fit, vision_analysis.
 
-## OUTPUT LANGUAGE RULE
-You MUST write 'summary', 'strengths', 'weaknesses', and 'jd_fit' values in natural, professional KOREAN.
-Do NOT use English in those text fields.
+Rules:
+1. The summary MUST reflect the actual avg_turn_score={avg_turn_score}. If it is below 60, the summary MUST be critical.
+2. If avg_turn_score < 50, state the candidate struggled significantly.
+3. If avg_turn_score >= 75, state performance was strong.
+4. weaknesses MUST explicitly mention any LOW-scoring turns (below 50) and what was missing (e.g., 구체적 예시 부재, STAR 구조 미적용).
+5. vision_analysis: write 1-2 Korean sentences about non-verbal attitude from emotion data. If no data, write "카메라 미사용으로 비언어 분석 불가."
 
-## REQUIRED JSON OUTPUT
-{{
-  "tech_score": <integer 0-100>,
-  "communication_score": <integer 0-100>,
-  "problem_solving_score": <integer 0-100>,
-  "summary": "<1-2 sentence overall Korean summary>",
-  "details": {{
-    "strengths": "<Korean: 2-3 specific strengths with evidence from transcript>",
-    "weaknesses": "<Korean: 2-3 specific improvement areas with evidence>",
-    "jd_fit": "<Korean: How well does the candidate fit the {job_title} role? Rate and explain.>"
-  }}
-}}"""
+Output ONLY this JSON (all text in Korean, do NOT change the numeric fields):
+{{"summary": "한국어 종합 평가 1-2문장", "strengths": "강점 2-3가지 한국어 서술", "weaknesses": "개선점 — 낮은 점수 턴 언급 포함 2-3가지 한국어 서술", "jd_fit": "JD 적합도 한국어 서술 + 상/중/하 평가", "vision_analysis": "비언어 표정 분석 한국어 1-2문장"}}
 
+Now output the JSON:"""
 
     try:
         ai = get_ai_service()
@@ -598,44 +729,73 @@ Do NOT use English in those text fields.
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
 
-        data = json.loads(raw)
+        text_data = json.loads(raw)
 
-        tech   = max(0, min(100, int(data.get("tech_score", 50))))
-        comm   = max(0, min(100, int(data.get("communication_score", 50))))
-        prob   = max(0, min(100, int(data.get("problem_solving_score", 50))))
-        total  = round((tech + comm + prob) / 3)
+        # ── Assemble final report with MATH scores + LLM text ───────────────
+        # communication_score: derived from avg but uses LLM's text quality as proxy
+        # Keep it close to avg but allow slight variation (±5)
+        comm_score = max(0, min(100, int(avg_turn_score * 1.0)))
+
+        total = round(
+            tech_score * 0.35 +
+            comm_score * 0.25 +
+            problem_solving_score * 0.25 +
+            non_verbal_score * 0.15
+        )
+
+        details = {
+            "strengths":       text_data.get("strengths", ""),
+            "weaknesses":      text_data.get("weaknesses", ""),
+            "jd_fit":          text_data.get("jd_fit", ""),
+            "vision_analysis": text_data.get("vision_analysis", "카메라 미사용으로 비언어 분석 불가."),
+            "score_breakdown": score_breakdown,
+            "avg_turn_score":  avg_turn_score,
+        }
 
         report = EvaluationReport(
             session_id=session_id,
             total_score=total,
-            tech_score=tech,
-            communication_score=comm,
-            problem_solving_score=prob,
-            summary=data.get("summary", ""),
-            details=data.get("details", {})
+            tech_score=tech_score,
+            communication_score=comm_score,
+            problem_solving_score=problem_solving_score,
+            non_verbal_score=non_verbal_score,
+            summary=text_data.get("summary", ""),
+            details=details
         )
         db.add(report)
         db.commit()
-        print(f"[REPORT] Generated for session {session_id}: total={total}")
+        print(f"[REPORT] Generated for session {session_id}: avg_turn={avg_turn_score}, total={total}")
 
     except Exception as e:
         print(f"[REPORT] Generation failed: {e}")
         # Persist fallback report so the frontend always gets something
         try:
+            fallback_details = {
+                "strengths": "",
+                "weaknesses": "보고서 생성 중 오류 발생.",
+                "jd_fit": "",
+                "vision_analysis": "비언어 분석 불가.",
+                "score_breakdown": score_breakdown,
+                "avg_turn_score": avg_turn_score,
+            }
+            total_fb = round(
+                tech_score * 0.35 + avg_turn_score * 0.25 +
+                problem_solving_score * 0.25 + non_verbal_score * 0.15
+            )
             fallback = EvaluationReport(
                 session_id=session_id,
-                total_score=50,
-                tech_score=50,
-                communication_score=50,
-                problem_solving_score=50,
-                summary="자동 분석 중 오류가 발생했습니다. 면접을 수고하셨습니다.",
-                details={
-                    "strengths": "분석 불가",
-                    "weaknesses": "분석 불가",
-                    "jd_fit": "분석 불가"
-                }
+                total_score=total_fb,
+                tech_score=tech_score,
+                communication_score=avg_turn_score,
+                problem_solving_score=problem_solving_score,
+                non_verbal_score=non_verbal_score,
+                summary="보고서 생성 중 오류가 발생했습니다.",
+                details=fallback_details
             )
             db.add(fallback)
             db.commit()
-        except Exception as e2:
-            print(f"[REPORT] Fallback also failed: {e2}")
+            print(f"[REPORT] Fallback report saved for session {session_id}")
+        except Exception as fb_err:
+            print(f"[REPORT] Fallback also failed: {fb_err}")
+
+
