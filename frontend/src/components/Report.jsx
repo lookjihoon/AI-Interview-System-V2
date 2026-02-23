@@ -140,9 +140,14 @@ export default function Report() {
   const totalScore   = safeNum(report?.total_score || Math.round(techScore * 0.40 + commScore * 0.25 + probScore * 0.25 + nvScore * 0.10));
   const summary      = report?.summary || '';
   const details      = report?.details ?? {};
-  const strengths    = details?.strengths || details?.strength || '';
-  const weaknesses   = details?.weaknesses || details?.weakness || details?.improvements || '';
-  const jdFit        = details?.jd_fit || details?.jd_fit_assessment || details?.fit || '';
+  const strengths          = details?.strengths || details?.strength || '';
+  const weaknesses         = details?.weaknesses || details?.weakness || details?.improvements || '';
+  const jdFit              = details?.jd_fit || details?.jd_fit_assessment || details?.fit || '';
+  const nonVerbalFeedback  = details?.non_verbal_feedback || '';
+  const totalTimeSec       = Number(details?.total_time) || 0;
+  const formatTotalTime    = (s) => s > 0
+    ? `${Math.floor(s / 60)}분 ${s % 60}초`
+    : null;
 
   const radarData = report
     ? [
@@ -241,7 +246,16 @@ export default function Report() {
         {/* Score Overview */}
         <section className="bg-white rounded-2xl shadow-sm p-8">
           <div className="flex flex-col md:flex-row items-center gap-10">
-            <ScoreRing score={totalScore} />
+            <div className="flex flex-col items-center">
+              <ScoreRing score={totalScore} />
+              {/* Total interview time badge */}
+              {formatTotalTime(totalTimeSec) && (
+                <div className="mt-3 flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-full">
+                  <span className="text-slate-400 text-xs">⏱</span>
+                  <span className="text-slate-600 text-xs font-medium">중 총 {formatTotalTime(totalTimeSec)}</span>
+                </div>
+              )}
+            </div>
             <div className="flex-1 w-full space-y-4">
               <ScoreBadge label="직무역량 (Hard Skill)"        score={techScore}  color="#3b82f6" />
               <ScoreBadge label="의사소통 (Communication)"     score={commScore}  color="#8b5cf6" />
@@ -276,6 +290,17 @@ export default function Report() {
               />
             </RadarChart>
           </ResponsiveContainer>
+
+          {/* Non-verbal Attitude Feedback — dedicated 1-line badge */}
+          {nonVerbalFeedback && (
+            <div className="mt-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+              <span className="text-amber-500 text-lg flex-shrink-0">📌</span>
+              <div>
+                <p className="text-xs font-semibold text-amber-700 mb-0.5">면접 태도 피드백</p>
+                <p className="text-sm text-amber-800 leading-relaxed">{nonVerbalFeedback}</p>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Summary */}
@@ -294,45 +319,72 @@ export default function Report() {
         </section>
 
         {/* Chat History for PDF */}
-        {transcript.length > 0 && (
-          <section className="bg-white rounded-2xl shadow-sm p-6">
-            <h2 className="text-base font-bold text-gray-800 mb-4 pb-2 border-b border-gray-200">
-              💬 면접 대화 기록
-            </h2>
-            <div className="space-y-4">
-              {transcript.map((item, idx) => (
-                <div key={idx} className="break-inside-avoid">
-                  {item.sender === 'ai' && (
+        {transcript.length > 0 && (() => {
+          // Build (question, answer) exchange pairs from flat transcript list
+          const exchanges = [];
+          let pendingQ = null;
+          for (const item of transcript) {
+            if (item.sender === 'ai') {
+              if (pendingQ) exchanges.push({ question: pendingQ, answer: null });
+              pendingQ = item;
+            } else if (item.sender === 'human' && pendingQ) {
+              exchanges.push({ question: pendingQ, answer: item });
+              pendingQ = null;
+            }
+          }
+          if (pendingQ) exchanges.push({ question: pendingQ, answer: null });
+
+          return (
+            <section className="bg-white rounded-2xl shadow-sm p-6">
+              <h2 className="text-base font-bold text-gray-800 mb-4 pb-2 border-b border-gray-200">
+                💬 면접 대화 기록
+              </h2>
+              <div className="space-y-5">
+                {exchanges.map((ex, idx) => (
+                  <div key={idx} className="break-inside-avoid space-y-2">
+                    {/* AI Question */}
                     <div className="flex gap-2">
                       <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mt-0.5">AI</span>
                       <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-sm text-gray-800 leading-relaxed flex-1">
-                        {item.content}
+                        {ex.question.content}
                       </div>
                     </div>
-                  )}
-                  {item.sender === 'human' && (
-                    <div className="flex gap-2 justify-end">
-                      <div className="bg-gray-100 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-800 leading-relaxed max-w-[80%]">
-                        {item.content}
-                      </div>
-                      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-400 flex items-center justify-center text-white text-xs font-bold mt-0.5">나</span>
-                    </div>
-                  )}
-                  {item.sender === 'evaluation' && (() => {
-                    const ev = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
-                    return (
-                      <div className="ml-8 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
-                        <span className="font-semibold">평가</span>
-                        {ev?.score !== undefined && <span className="ml-2 font-bold">{ev.score}점</span>}
-                        {ev?.feedback && <p className="mt-1 text-amber-700">{ev.feedback}</p>}
-                      </div>
-                    );
-                  })()}
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+                    {/* Human Answer */}
+                    {ex.answer && (
+                      <>
+                        <div className="flex gap-2 justify-end">
+                          <div className="bg-gray-100 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-800 leading-relaxed max-w-[85%]">
+                            {ex.answer.content}
+                            {ex.answer.answer_time > 0 && (
+                              <p className="text-xs text-gray-400 mt-1">⏱ 답변 소요 시간: {ex.answer.answer_time}초</p>
+                            )}
+                          </div>
+                          <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-400 flex items-center justify-center text-white text-xs font-bold mt-0.5">나</span>
+                        </div>
+                        {/* Per-turn evaluation badge */}
+                        {(ex.answer.score != null || ex.answer.feedback) && (
+                          <div className="ml-8 flex items-start gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-800">
+                            <span className="text-green-500 mt-0.5">✅</span>
+                            <div>
+                              {ex.answer.score != null && (
+                                <span className="font-bold mr-2">AI 평가 {ex.answer.score}점</span>
+                              )}
+                              {ex.answer.feedback && (
+                                <p className="mt-0.5 text-green-700 leading-relaxed">{ex.answer.feedback}</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })()}
+
 
         {/* Raw JSON fallback — only shows if parse error AND no structured data */}
         {parseError && !strengths && !weaknesses && (

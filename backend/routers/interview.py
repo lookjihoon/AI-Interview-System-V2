@@ -96,7 +96,9 @@ class ChatRequest(BaseModel):
     session_id: int = Field(..., description="Interview session ID")
     user_answer: Optional[str] = Field(None, description="User's answer to previous question")
     vision_data: Optional[Dict[str, Any]] = Field(None, description="Emotion percentages from webcam analysis e.g. {neutral: 50, happy: 30}")
-    
+    answer_time: Optional[int] = Field(0, description="Time taken to type/speak the answer in seconds")
+    total_time: Optional[int] = Field(0, description="Total elapsed interview time in seconds")
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -120,7 +122,10 @@ class TranscriptItem(BaseModel):
     sender: str
     content: str
     timestamp: datetime
-    
+    score: Optional[int] = None
+    feedback: Optional[str] = None
+    answer_time: Optional[int] = None   # seconds; None for AI turns
+
     class Config:
         from_attributes = True
 
@@ -261,7 +266,8 @@ async def chat(
     # If user provided an answer, evaluate it
     if request.user_answer:
         # Save user's answer to transcript first (score=None until evaluated)
-        human_tx = Transcript(session_id=session.id, sender="human", content=request.user_answer)
+        human_tx = Transcript(session_id=session.id, sender="human", content=request.user_answer,
+                              answer_time=request.answer_time or 0)
         db.add(human_tx)
         db.commit()
         db.refresh(human_tx)  # get the new row's id
@@ -274,6 +280,7 @@ async def chat(
 
         # Turn 8: user answered the closing question → generate farewell then COMPLETED
         if human_turn_count >= 8:
+            print(f"[CHAT] Turn 8 reached — vision_data received: {request.vision_data!r}")
             goodbye = ai_service.generate_closing_response(request.user_answer or "")
             db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
             session.status = SessionStatus.COMPLETED
@@ -283,7 +290,8 @@ async def chat(
                 generate_final_report(
                     session_id=session.id,
                     db=db,
-                    vision_data=request.vision_data
+                    vision_data=request.vision_data,
+                    total_time=request.total_time or 0
                 )
             except Exception as report_err:
                 print(f"[REPORT] Non-blocking error: {report_err}")
@@ -310,9 +318,10 @@ async def chat(
                 user_answer=request.user_answer,
                 job_context=job_context
             )
-            # ── Persist the turn score to the transcript row ─────────────────
+            # ── Persist score AND feedback to the transcript row ───────────────────
             if evaluation and evaluation.get("score") is not None:
-                human_tx.score = int(evaluation["score"])
+                human_tx.score    = int(evaluation["score"])
+                human_tx.feedback = evaluation.get("feedback") or evaluation.get("comment") or ""
                 db.commit()
 
     # Get history of asked questions by extracting question_ids from transcript
@@ -452,8 +461,17 @@ async def get_transcript(
     ).order_by(Transcript.timestamp.asc()).all()
 
     # Return empty list for brand-new sessions — this is correct REST behaviour
-    return [TranscriptItem(sender=t.sender, content=t.content, timestamp=t.timestamp)
-            for t in transcripts]
+    return [
+        TranscriptItem(
+            sender=t.sender,
+            content=t.content,
+            timestamp=t.timestamp,
+            score=t.score,
+            feedback=t.feedback,
+            answer_time=t.answer_time,
+        )
+        for t in transcripts
+    ]
 
 
 
@@ -489,11 +507,12 @@ async def end_interview(
 class ReportResponse(BaseModel):
     session_id: int
     total_score: int
-    tech_score: Optional[int]
-    communication_score: Optional[int]
-    problem_solving_score: Optional[int]
-    summary: Optional[str]
-    details: Optional[Dict[str, Any]]
+    tech_score: Optional[int] = None
+    communication_score: Optional[int] = None
+    problem_solving_score: Optional[int] = None
+    non_verbal_score: Optional[int] = None      # ← was MISSING — FastAPI was stripping this field!
+    summary: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
     created_at: datetime
 
     class Config:
@@ -525,6 +544,7 @@ async def get_report(
         tech_score=report.tech_score,
         communication_score=report.communication_score,
         problem_solving_score=report.problem_solving_score,
+        non_verbal_score=report.non_verbal_score,     # ← explicitly included now
         summary=report.summary,
         details=report.details,
         created_at=report.created_at

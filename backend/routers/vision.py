@@ -52,17 +52,24 @@ async def analyze_vision(request: VisionRequest):
             print("[VISION] Failed to decode image bytes — returning neutral")
             return VisionResponse(dominant_emotion="neutral", status="error")
 
+        # ── Brightness pre-check: covered/black camera? ──────────────────────
+        # np.mean on BGR image gives average pixel intensity (0=black, 255=white)
+        brightness = float(np.mean(img_bgr))
+        print(f"[VISION] brightness={brightness:.1f}")
+        if brightness < 20:
+            print("[VISION] Frame too dark — camera likely covered")
+            return VisionResponse(dominant_emotion="neutral", status="no_face_detected")
+
         # ── DeepFace emotion analysis ────────────────────────────────────────
         try:
             results = DeepFace.analyze(
                 img_path=img_bgr,
                 actions=["emotion"],
-                enforce_detection=False,   # partial/missing face → still analyze
+                enforce_detection=False,   # allow partial faces; brightness check handles covered cam
                 silent=True
             )
         except ValueError as ve:
-            # DeepFace raises ValueError("Face could not be detected") when
-            # enforce_detection=True, but can also surface with =False on blank frames
+            # DeepFace may still raise on completely featureless frames
             print(f"[VISION] No face detected: {ve}")
             return VisionResponse(dominant_emotion="neutral", status="no_face_detected")
 

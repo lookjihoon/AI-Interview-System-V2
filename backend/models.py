@@ -112,7 +112,9 @@ class Transcript(Base):
     sender = Column(String(50), nullable=False)  # 'ai' or 'human'
     content = Column(Text, nullable=False)
     question_id = Column(Integer, ForeignKey("question_bank.id"), nullable=True)  # Track which question was asked
-    score = Column(Integer, nullable=True)  # Per-turn evaluation score (0-100), only set for human turns
+    score = Column(Integer, nullable=True)      # Per-turn evaluation score (0-100), only set for human turns
+    feedback = Column(Text, nullable=True)       # Per-turn AI evaluation feedback text
+    answer_time = Column(Integer, default=0)     # Time taken to answer in seconds (0 for AI turns)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

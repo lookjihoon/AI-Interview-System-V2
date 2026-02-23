@@ -208,10 +208,26 @@ export default function ChatRoom() {
   const [emotionStats, setEmotionStats]     = useState({}); // { emotion: count } tally
   const [visionAnalyzing, setVisionAnalyzing] = useState(false);
   const [faceError, setFaceError]           = useState(false); // no face detected
+  const [totalSeconds, setTotalSeconds]     = useState(0);    // global interview timer
+  const [turnStartTime, setTurnStartTime]   = useState(() => Date.now()); // per-turn answer timer
 
   /* smooth scroll */
   const scrollToBottom = useCallback(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
+
+  /* ── Global interview timer (MM:SS) — stops when interview completes ───── */
+  useEffect(() => {
+    if (isCompleted) return;               // don't start a new interval after end
+    const t = setInterval(() => setTotalSeconds(s => s + 1), 1000);
+    return () => clearInterval(t);         // cleanup on unmount OR when isCompleted flips
+  }, [isCompleted]);
+  const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  /* ── Per-turn timer: reset when AI stops speaking ───────────────────────── */
+  useEffect(() => {
+    if (!isPlaying) setTurnStartTime(Date.now());
+  }, [isPlaying]);
+
 
   const appendMsg = (msg) => setMessages(prev => [...prev, msg]);
 
@@ -376,13 +392,18 @@ export default function ChatRoom() {
     // Send raw emotion counts — backend formula works directly with counts
     const total_samples = Object.values(emotionStats).reduce((s, c) => s + c, 0);
     const vision_data = total_samples > 0 ? { ...emotionStats } : null;
+    const answer_time = Math.floor((Date.now() - turnStartTime) / 1000);
 
     try {
       const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, {
         session_id:  parseInt(sessionId, 10),
         user_answer: answer,
-        vision_data
+        vision_data,
+        answer_time,
+        total_time:  totalSeconds,   // always send; backend stores in details on final turn
       });
+      // Reset turn timer for next question
+      setTurnStartTime(Date.now());
       if (data?.evaluation && typeof data.evaluation === 'object') {
         appendMsg({ sender: 'evaluation', content: data.evaluation, timestamp: new Date().toISOString() });
       }
@@ -454,11 +475,17 @@ export default function ChatRoom() {
       {/* ══ LEFT PANE — AI Avatar + User Webcam (40%) ══ */}
       <div className="flex flex-col items-center justify-between bg-gradient-to-b from-slate-800 to-slate-900 md:w-2/5 p-6 border-r border-slate-700/50">
 
-        {/* Session info */}
+        {/* Session info + global timer */}
         <div className="w-full text-center mb-4">
           <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">AI 면접관</p>
           <h2 className="text-white font-bold text-sm mt-1">{sessionData?.jobTitle ?? '면접 세션'}</h2>
           <p className="text-slate-500 text-xs">지원자: {sessionData?.userName ?? '-'}</p>
+          {/* Global timer badge */}
+          <div className="inline-flex items-center gap-1.5 mt-2 px-3 py-1 bg-slate-700/60 rounded-full">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+            <span className="text-red-300 font-mono text-xs font-semibold tracking-wider">{formatTime(totalSeconds)}</span>
+            <span className="text-slate-500 text-xs">경과</span>
+          </div>
         </div>
 
         {/* AI Avatar */}

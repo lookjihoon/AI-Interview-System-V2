@@ -214,11 +214,17 @@ class InterviewAI:
         return last.content if last else ""
 
     def _intro_already_asked(self, session_id: int, db: Session) -> bool:
-        """Check whether the self-intro question has already been asked."""
+        """Check whether the self-intro question has already been asked.
+        Matches both '자기소개' and '자신을 소개' (the combined opening greeting phrase).
+        """
+        from sqlalchemy import or_
         return db.query(Transcript).filter(
             Transcript.session_id == session_id,
             Transcript.sender == "ai",
-            Transcript.content.contains("자기소개")
+            or_(
+                Transcript.content.contains("자기소개"),
+                Transcript.content.contains("자신을 소개")
+            )
         ).first() is not None
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -647,7 +653,7 @@ def get_ai_service() -> InterviewAI:
     return _ai_service
 
 
-def generate_final_report(session_id: int, db: Session, vision_data: Optional[Dict[str, Any]] = None) -> None:
+def generate_final_report(session_id: int, db: Session, vision_data: Optional[Dict[str, Any]] = None, total_time: int = 0) -> None:
     """
     Generate a comprehensive evaluation report for a completed interview session.
 
@@ -696,9 +702,9 @@ def generate_final_report(session_id: int, db: Session, vision_data: Optional[Di
     # problem_solving_score: same base, slightly harsher penalty for lack of STAR
     problem_solving_score = max(0, min(100, int(avg_turn_score * 0.90)))
 
-    # ── MATH: Non-verbal score from vision_data ──────────────────────────────
+    # ── MATH: Non-verbal score from vision_data (pre-LLM, for prompt context only) ─
     vision_summary = "(not provided)"
-    non_verbal_score = 70  # default when no camera data
+    pre_nv_score = 70  # used only for the LLM prompt
     if vision_data and isinstance(vision_data, dict) and vision_data:
         # vision_data is raw counts: { 'neutral': 12, 'happy': 3, 'sad': 1, ... }
         total_emotions = sum(v for v in vision_data.values() if isinstance(v, (int, float)))
@@ -706,15 +712,15 @@ def generate_final_report(session_id: int, db: Session, vision_data: Optional[Di
             positive = vision_data.get('neutral', 0) + vision_data.get('happy', 0)
             ratio = positive / total_emotions
             # Base score 50 + up to 50 points based on positive expression ratio
-            non_verbal_score = int(50 + (ratio * 50))
-            non_verbal_score = max(0, min(100, non_verbal_score))
+            pre_nv_score = int(50 + (ratio * 50))
+            pre_nv_score = max(0, min(100, pre_nv_score))
             pct_str = ", ".join(
                 f"{k}: {round(v/total_emotions*100, 1)}%" for k, v in vision_data.items() if isinstance(v, (int, float))
             )
             vision_summary = f"{pct_str} ({int(total_emotions)} frames)"
         else:
             vision_summary = "(no frames captured)"
-    print(f"[REPORT] non_verbal_score={non_verbal_score}, vision_summary={vision_summary}")
+    print(f"[REPORT] pre_nv_score={pre_nv_score}, vision_summary={vision_summary}")
 
     # ── Build Q&A text for LLM (text generation only) ────────────────────────
     qa_pairs = []
@@ -748,6 +754,7 @@ Per-turn scores (already computed, DO NOT change): {score_breakdown}
 Average turn score: {avg_turn_score}/100
 Tech score (pre-computed): {tech_score}/100
 Problem-solving score (pre-computed): {problem_solving_score}/100
+Non-verbal attitude score (pre-computed): {pre_nv_score}/100
 Candidate facial/emotion data: {vision_summary}
 
 YOUR ONLY JOB: Write honest Korean text for summary, strengths, weaknesses, jd_fit, vision_analysis.
@@ -758,9 +765,10 @@ Rules:
 3. If avg_turn_score >= 75, state performance was strong.
 4. weaknesses MUST explicitly mention any LOW-scoring turns (below 50) and what was missing (e.g., 구체적 예시 부재, STAR 구조 미적용).
 5. vision_analysis: write 1-2 Korean sentences about non-verbal attitude from emotion data. If no data, write "카메라 미사용으로 비언어 분석 불가."
+6. 지원자의 비언어적 면접 태도 점수는 {pre_nv_score}/100점입니다. Summary 또는 Strengths/Weaknesses 작성 시, 표정, 긴장도, 눈맞춤 등 면접 태도에 대한 피드백을 반드시 1-2문장 포함하세요.
 
 Output ONLY this JSON (all text in Korean, do NOT change the numeric fields):
-{{"summary": "한국어 종합 평가 1-2문장", "strengths": "강점 2-3가지 한국어 서술", "weaknesses": "개선점 — 낮은 점수 턴 언급 포함 2-3가지 한국어 서술", "jd_fit": "JD 적합도 한국어 서술 + 상/중/하 평가", "vision_analysis": "비언어 표정 분석 한국어 1-2문장"}}
+{{"summary": "한국어 종합 평가 1-2문장", "strengths": "강점 2-3가지 한국어 서술", "weaknesses": "개선점 — 낙은 점수 턴 언급 포함 2-3가지 한국어 서술", "jd_fit": "JD 적합도 한국어 서술 + 상/중/하 평가", "vision_analysis": "비언어 표정 분석 한국어 1-2문장", "non_verbal_feedback": "표정/긴장도/눈맞춤 등 면접 태도 종합 1줄 한국어"}}
 
 Now output the JSON:"""
 
@@ -780,12 +788,17 @@ Now output the JSON:"""
         # ── HARD-OVERRIDE: recalculate scores in Python AFTER LLM parse ──────
         # Non-verbal: count-based formula (vision_data = raw counts from frontend)
         nv_score = 70  # default when no camera data
-        if vision_data and isinstance(vision_data, dict):
-            total_v = sum(v for v in vision_data.values() if isinstance(v, (int, float)))
-            if total_v > 0:
-                positive_v = vision_data.get('neutral', 0) + vision_data.get('happy', 0)
-                nv_score = int(50 + ((positive_v / total_v) * 50))
-                nv_score = max(0, min(100, nv_score))
+        try:
+            if vision_data and isinstance(vision_data, dict):
+                total_v = sum(v for v in vision_data.values() if isinstance(v, (int, float)))
+                if total_v > 0:
+                    positive_v = vision_data.get('neutral', 0) + vision_data.get('happy', 0)
+                    nv_score = int(50 + ((positive_v / total_v) * 50))
+                    nv_score = max(0, min(100, nv_score))
+            print(f"[REPORT] POST-LLM nv_score={nv_score} (vision_data keys: {list(vision_data.keys()) if vision_data else None})")
+        except Exception as nv_err:
+            print(f"[REPORT] nv_score calculation FAILED: {nv_err!r} — keeping default 70")
+            nv_score = 70
 
         # communication_score close to avg_turn_score
         comm_score = max(0, min(100, int(avg_turn_score * 1.0)))
@@ -801,13 +814,16 @@ Now output the JSON:"""
               f"ps={problem_solving_score}, nv={nv_score}, total={total}")
 
         details = {
-            # ── Text fields from LLM ──────────────────────────────────────────
-            "strengths":       text_data.get("strengths", ""),
-            "weaknesses":      text_data.get("weaknesses", ""),
-            "jd_fit":          text_data.get("jd_fit", ""),
-            "vision_analysis": text_data.get("vision_analysis", "카메라 미사용으로 비언어 분석 불가."),
-            "score_breakdown": score_breakdown,
-            "avg_turn_score":  avg_turn_score,
+            # ── Text fields from LLM ───────────────────────────────────────
+            "strengths":           text_data.get("strengths", ""),
+            "weaknesses":          text_data.get("weaknesses", ""),
+            "jd_fit":              text_data.get("jd_fit", ""),
+            "vision_analysis":     text_data.get("vision_analysis", "카메라 미사용으로 비언어 분석 불가."),
+            "non_verbal_feedback": text_data.get("non_verbal_feedback", ""),  # ← dedicated 1-line attitude badge
+            "score_breakdown":     score_breakdown,
+            "avg_turn_score":      avg_turn_score,
+            # ── Total interview elapsed time (seconds) ────────────────────
+            "total_time":          total_time,
             # ── AUTHORITATIVE Python-computed scores (overrides any LLM value) ─
             "tech_score":             tech_score,
             "communication_score":    comm_score,
