@@ -94,6 +94,7 @@ export default function Report() {
   const [error, setError] = useState('');
   const [retries, setRetries] = useState(0);
   const [parseError, setParseError] = useState(false);
+  const [transcript, setTranscript] = useState([]);
 
   useEffect(() => {
     let timer;
@@ -124,6 +125,10 @@ export default function Report() {
       }
     };
     fetchReport();
+    // Fetch transcript in parallel — don't fail report if this errors
+    axios.get(`${API_BASE_URL}/api/interview/session/${sessionId}/transcript`)
+      .then(({ data }) => setTranscript(Array.isArray(data) ? data : []))
+      .catch(() => {});
     return () => clearTimeout(timer);
   }, [sessionId, retries]);
 
@@ -131,8 +136,8 @@ export default function Report() {
   const techScore    = safeNum(report?.tech_score);
   const commScore    = safeNum(report?.communication_score);
   const probScore    = safeNum(report?.problem_solving_score);
-  const nvScore      = safeNum(report?.non_verbal_score ?? report?.details?.non_verbal_score);
-  const totalScore   = safeNum(report?.total_score ?? Math.round((techScore + commScore + probScore) / 3));
+  const nvScore      = safeNum(report?.non_verbal_score);
+  const totalScore   = safeNum(report?.total_score || Math.round(techScore * 0.40 + commScore * 0.25 + probScore * 0.25 + nvScore * 0.10));
   const summary      = report?.summary || '';
   const details      = report?.details ?? {};
   const strengths    = details?.strengths || details?.strength || '';
@@ -203,16 +208,24 @@ export default function Report() {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
 
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm">
+      <header className="bg-white border-b border-gray-200 shadow-sm print:hidden">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-gray-900">면접 결과 리포트</h1>
             <p className="text-xs text-gray-500 mt-0.5">Session #{sessionId}</p>
           </div>
-          <button onClick={() => navigate('/')}
-            className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-            새 면접 시작
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.print()}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              📄 PDF로 저장
+            </button>
+            <button onClick={() => navigate('/')}
+              className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+              새 면접 시작
+            </button>
+          </div>
         </div>
       </header>
 
@@ -280,13 +293,54 @@ export default function Report() {
           <DetailCard icon="🎯" title="직무 적합도 (JD Fit)"    content={jdFit}      accent="#3b82f6" />
         </section>
 
+        {/* Chat History for PDF */}
+        {transcript.length > 0 && (
+          <section className="bg-white rounded-2xl shadow-sm p-6">
+            <h2 className="text-base font-bold text-gray-800 mb-4 pb-2 border-b border-gray-200">
+              💬 면접 대화 기록
+            </h2>
+            <div className="space-y-4">
+              {transcript.map((item, idx) => (
+                <div key={idx} className="break-inside-avoid">
+                  {item.sender === 'ai' && (
+                    <div className="flex gap-2">
+                      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold mt-0.5">AI</span>
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-sm text-gray-800 leading-relaxed flex-1">
+                        {item.content}
+                      </div>
+                    </div>
+                  )}
+                  {item.sender === 'human' && (
+                    <div className="flex gap-2 justify-end">
+                      <div className="bg-gray-100 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-800 leading-relaxed max-w-[80%]">
+                        {item.content}
+                      </div>
+                      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-gray-400 flex items-center justify-center text-white text-xs font-bold mt-0.5">나</span>
+                    </div>
+                  )}
+                  {item.sender === 'evaluation' && (() => {
+                    const ev = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
+                    return (
+                      <div className="ml-8 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
+                        <span className="font-semibold">평가</span>
+                        {ev?.score !== undefined && <span className="ml-2 font-bold">{ev.score}점</span>}
+                        {ev?.feedback && <p className="mt-1 text-amber-700">{ev.feedback}</p>}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Raw JSON fallback — only shows if parse error AND no structured data */}
         {parseError && !strengths && !weaknesses && (
           <RawFallback data={report} />
         )}
 
         {/* Footer */}
-        <div className="text-center text-xs text-gray-400 pb-4">
+        <div className="text-center text-xs text-gray-400 pb-4 print:hidden">
           Powered by AI Interview System · 평가는 AI 분석 기반이며 참고용입니다.
         </div>
       </main>

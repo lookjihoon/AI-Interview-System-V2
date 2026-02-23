@@ -18,11 +18,16 @@ from models import User, JobPosting, QuestionBank, InterviewSession, Transcript
 from database import SessionLocal
 
 
-# ─── Phase Turn Boundaries ───────────────────────────────────────────────────
-PHASE2_TURNS = range(1, 4)   # turns 1-3  → Technical Hard Skills
-PHASE3_TURNS = range(4, 6)   # turns 4-5  → Behavioral / Soft Skills
-CLOSING_TURN = 6              # turn 6     → closing question (session stays IN_PROGRESS)
-# turn 7 is handled by the router (user answers closing q → goodbye + COMPLETED)
+# ─── Phase Turn Boundaries (0-based human_turn count) ────────────────────────────
+# turn=0  → Ask self-intro (no human answers yet)
+# turn=1,2  → Technical RAG
+# turn=3,4  → Behavioral (team project + follow-up)
+# turn=5,6  → Personality (culture-fit + follow-up)
+# turn=7    → Closing question (├ the 8th AI question asked)
+# turn=8+   → Router ends the session after closing answer
+PHASE2_TURNS = range(1, 3)   # turns 1-2  → Technical Hard Skills (RAG)
+PHASE3_TURNS = range(3, 7)   # turns 3-6  → Behavioral / Personality (LLM-generated)
+CLOSING_TURN = 7              # turn 7     → Closing question
 
 BEHAVIORAL_CATEGORIES = {"BEHAVIORAL", "SOFT_SKILL", "SOFT SKILL", "PERSONALITY"}
 
@@ -105,16 +110,18 @@ class InterviewAI:
 
     def _generate_behavioral_question(self, turn: int, last_answer: str, resume_text: Optional[str]) -> str:
         """
-        For Turn 4: ask a fixed team-project behavioral question.
-        For Turn 5: generate an LLM follow-up on the candidate's last answer.
-        Falls back to a hardcoded question on error.
-        """
+    For Turn 4: team project / conflict behavioral question.
+    For Turn 5: LLM follow-up on Turn 4 answer.
+    For Turn 6: personality / cultural-fit question.
+    For Turn 7: LLM follow-up on Turn 6 answer.
+    Falls back to a hardcoded question on error.
+    """
         resume_snippet = ""
         if resume_text:
             lines = [l.strip() for l in resume_text.splitlines() if l.strip()][:5]
             resume_snippet = " ".join(lines)
 
-        if turn == 4:
+        if turn == 3:
             prompt = (
                 "[SYSTEM] You are a professional Korean interviewer conducting a behavioral interview.\n"
                 "Generate EXACTLY ONE behavioral interview question IN KOREAN that asks about:\n"
@@ -131,7 +138,7 @@ class InterviewAI:
                 "가장 어렵거나 갈등이 있었던 상황을, 본인이 어떤 역할을 맡아 어떻게 해결했는지 "
                 "구체적으로 설명해 주시겠어요?"
             )
-        else:  # turn == 5 — follow-up
+        elif turn == 4:  # team project follow-up
             prompt = (
                 "[SYSTEM] You are a professional Korean interviewer.\n"
                 "The candidate just answered a question about their team project and problem-solving experience.\n"
@@ -146,6 +153,40 @@ class InterviewAI:
             fallback = (
                 "방금 말씀하신 경험에서 가장 인상 깊었던 배움이나, "
                 "그 이후 유사한 상황에서 어떻게 다르게 접근하셨는지 구체적으로 말씀해 주시겠어요?"
+            )
+        elif turn == 5:  # personality / cultural fit
+            prompt = (
+                "[SYSTEM] You are a professional Korean interviewer conducting a personality and cultural-fit interview.\n"
+                "Generate EXACTLY ONE personality/인성 interview question IN KOREAN.\n"
+                "Choose ONE topic from the following list:\n"
+                "  - 가장 크게 실패했던 경험과 그 극복 과정\n"
+                "  - 스트레스나 압박을 받을 때 어떻게 관리하고 대처하는지\n"
+                "  - 입사 후 3~5년 뒤 어때 모습을 목표로 하고 있는지\n"
+                "  - 동료나 선배와 의견 충돌이 있을 때 어떻게 소통하는지\n"
+                f"Candidate background hint: {resume_snippet or '(not provided)'}\n"
+                "STRICT FORMAT RULE: End your question with a single proper Korean question ending such as "
+                "'~하셨나요?', '~인가요?', '~있으신가요?', or '~주시겠어요?'.\n"
+                "DO NOT append extra words or '~요.' after the question mark. Output ONLY the question sentence."
+            )
+            fallback = (
+                "지금까지의 커리어에서 가장 크게 실패했던 경험과, "
+                "그 상황을 어떻게 극복하고 어떤 교훈을 얻으셨는지 말씀해 주시겠어요?"
+            )
+        else:  # turn == 6 — personality follow-up
+            prompt = (
+                "[SYSTEM] You are a professional Korean interviewer.\n"
+                "The candidate just answered a personality/인성 question.\n"
+                f"Their answer: {last_answer[:300] if last_answer else '(no answer yet)'}\n"
+                "Generate EXACTLY ONE follow-up question IN KOREAN that:\n"
+                "  - Explores their values, mindset, or growth from the experience more deeply\n"
+                "  - Does NOT repeat, rephrase, or re-ask the same question\n"
+                "STRICT FORMAT RULE: End your question with a single proper Korean question ending such as "
+                "'~하셨나요?', '~인가요?', '~있으신가요?', or '~주시겠어요?'.\n"
+                "DO NOT append extra words or '~요.' after the question mark. Output ONLY the question sentence."
+            )
+            fallback = (
+                "그 경험을 통해 본인의 어떤 가치관이나 업무 방식이 변화했는지, "
+                "구체적인 사례와 함께 말씀해 주시겠어요?"
             )
 
         try:
@@ -366,11 +407,11 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
         session_resume_text: str = None
     ) -> Optional[QuestionBank]:
         """
-        Phase-aware question selection:
-          Phase 1 (turn 0): self-introduction
-          Phase 2 (turn 1-3): technical RAG questions (personalised)
-          Phase 3 (turn 4-5): behavioral/soft-skill RAG questions
-          Phase 4 (turn 6+): closing → returns dummy with id=None
+        Phase-aware question selection (0-based human_turn count):
+          Phase 1 (turn=0): self-introduction
+          Phase 2 (turn=1,2): technical RAG questions (personalised)
+          Phase 3 (turn=3-6): behavioral + personality questions (LLM-generated)
+          Phase 4 (turn=7): closing question → returns dummy with category=CLOSING
         """
         # ── Turn counting ────────────────────────────────────────────────────
         turn = self._get_turn_count(session_id, db) if session_id else len(history_ids)
@@ -408,9 +449,10 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
         last_answer    = self._get_last_human_answer(session_id, db) if session_id else ""
         force_behavioral = turn in PHASE3_TURNS
 
-        # ── Phase 3 (Turn 4 & 5): LLM-generated behavioral questions — bypass RAG ──
-        if turn in (4, 5):
-            print(f"[Phase] → Phase 3 BEHAVIORAL (LLM-generated, turn={turn})")
+        # ── Phase 3 (Turns 4-7): LLM-generated behavioral/personality questions — bypass RAG ──
+        if turn in (3, 4, 5, 6):
+            sub = "팀 프로젝트 / 갈등" if turn <= 4 else "인성 / 컬처핏"
+            print(f"[Phase] → Phase 3 BEHAVIORAL/PERSONALITY (LLM-generated, turn={turn})")
             dummy = QuestionBank()
             dummy.id = None  # Not a RAG question
             dummy.question_text = self._generate_behavioral_question(
@@ -419,7 +461,7 @@ Output ONLY your brief response — plain text, no JSON, no markdown.
                 resume_text=session_resume_text
             )
             dummy.category = "BEHAVIORAL"
-            dummy.sub_category = "팀 프로젝트 / 인성"
+            dummy.sub_category = sub
             return dummy
 
         if force_behavioral:
@@ -658,17 +700,21 @@ def generate_final_report(session_id: int, db: Session, vision_data: Optional[Di
     vision_summary = "(not provided)"
     non_verbal_score = 70  # default when no camera data
     if vision_data and isinstance(vision_data, dict) and vision_data:
-        lines = [f"{k}: {v:.1f}%" for k, v in vision_data.items()]
-        vision_summary = ", ".join(lines)
-        positive_pct = vision_data.get("happy", 0) + vision_data.get("neutral", 0)
-        negative_pct = vision_data.get("fear", 0) + vision_data.get("angry", 0) + vision_data.get("sad", 0)
-        total_pct = positive_pct + negative_pct
-        if total_pct > 0:
-            pos_ratio = positive_pct / total_pct
+        # vision_data is raw counts: { 'neutral': 12, 'happy': 3, 'sad': 1, ... }
+        total_emotions = sum(v for v in vision_data.values() if isinstance(v, (int, float)))
+        if total_emotions > 0:
+            positive = vision_data.get('neutral', 0) + vision_data.get('happy', 0)
+            ratio = positive / total_emotions
+            # Base score 50 + up to 50 points based on positive expression ratio
+            non_verbal_score = int(50 + (ratio * 50))
+            non_verbal_score = max(0, min(100, non_verbal_score))
+            pct_str = ", ".join(
+                f"{k}: {round(v/total_emotions*100, 1)}%" for k, v in vision_data.items() if isinstance(v, (int, float))
+            )
+            vision_summary = f"{pct_str} ({int(total_emotions)} frames)"
         else:
-            pos_ratio = 0.5
-        # 55-90 range: high positive → 90, high negative → 55
-        non_verbal_score = max(0, min(100, int(55 + pos_ratio * 35)))
+            vision_summary = "(no frames captured)"
+    print(f"[REPORT] non_verbal_score={non_verbal_score}, vision_summary={vision_summary}")
 
     # ── Build Q&A text for LLM (text generation only) ────────────────────────
     qa_pairs = []
@@ -731,25 +777,43 @@ Now output the JSON:"""
 
         text_data = json.loads(raw)
 
-        # ── Assemble final report with MATH scores + LLM text ───────────────
-        # communication_score: derived from avg but uses LLM's text quality as proxy
-        # Keep it close to avg but allow slight variation (±5)
+        # ── HARD-OVERRIDE: recalculate scores in Python AFTER LLM parse ──────
+        # Non-verbal: count-based formula (vision_data = raw counts from frontend)
+        nv_score = 70  # default when no camera data
+        if vision_data and isinstance(vision_data, dict):
+            total_v = sum(v for v in vision_data.values() if isinstance(v, (int, float)))
+            if total_v > 0:
+                positive_v = vision_data.get('neutral', 0) + vision_data.get('happy', 0)
+                nv_score = int(50 + ((positive_v / total_v) * 50))
+                nv_score = max(0, min(100, nv_score))
+
+        # communication_score close to avg_turn_score
         comm_score = max(0, min(100, int(avg_turn_score * 1.0)))
 
-        total = round(
-            tech_score * 0.35 +
-            comm_score * 0.25 +
+        # Weighted total: Tech 40% | Comm 25% | Problem 25% | NV 10%
+        total = int(round(
+            tech_score            * 0.40 +
+            comm_score            * 0.25 +
             problem_solving_score * 0.25 +
-            non_verbal_score * 0.15
-        )
+            nv_score              * 0.10
+        ))
+        print(f"[REPORT] FINAL SCORES — tech={tech_score}, comm={comm_score}, "
+              f"ps={problem_solving_score}, nv={nv_score}, total={total}")
 
         details = {
+            # ── Text fields from LLM ──────────────────────────────────────────
             "strengths":       text_data.get("strengths", ""),
             "weaknesses":      text_data.get("weaknesses", ""),
             "jd_fit":          text_data.get("jd_fit", ""),
             "vision_analysis": text_data.get("vision_analysis", "카메라 미사용으로 비언어 분석 불가."),
             "score_breakdown": score_breakdown,
             "avg_turn_score":  avg_turn_score,
+            # ── AUTHORITATIVE Python-computed scores (overrides any LLM value) ─
+            "tech_score":             tech_score,
+            "communication_score":    comm_score,
+            "problem_solving_score":  problem_solving_score,
+            "non_verbal_score":       nv_score,
+            "total_score":            total,
         }
 
         report = EvaluationReport(
@@ -758,13 +822,17 @@ Now output the JSON:"""
             tech_score=tech_score,
             communication_score=comm_score,
             problem_solving_score=problem_solving_score,
-            non_verbal_score=non_verbal_score,
+            non_verbal_score=nv_score,
             summary=text_data.get("summary", ""),
             details=details
         )
+        # ── ULTIMATE OVERRIDE: explicit property write before INSERT ──────────
+        # Guards against any ORM default / constructor scoping issue
+        report.non_verbal_score = nv_score
+        report.total_score      = total
         db.add(report)
         db.commit()
-        print(f"[REPORT] Generated for session {session_id}: avg_turn={avg_turn_score}, total={total}")
+        print(f"[REPORT] Saved for session {session_id}: avg_turn={avg_turn_score}, total={total}, nv={nv_score}")
 
     except Exception as e:
         print(f"[REPORT] Generation failed: {e}")

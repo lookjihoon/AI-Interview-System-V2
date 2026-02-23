@@ -85,7 +85,8 @@ class InterviewStartResponse(BaseModel):
     message: str
     user_name: str
     job_title: str
-    
+    audio_url: Optional[str] = None
+
     class Config:
         from_attributes = True
 
@@ -197,29 +198,34 @@ async def start_interview(
     db.commit()
     db.refresh(session)
 
-    # 이력서 업로드 여부를 인사말에 반영
+    # Combine greeting + first self-intro question into ONE message / ONE TTS
     if resume_text_str:
-        greeting = (
+        opening = (
             f"안녕하세요, {user.name}님! "
             f"{job.title} 직무 면접에 오신 것을 환영합니다. "
             f"이력서를 잘 받았습니다. 이력서를 바탕으로 맞춤형 질문을 드리겠습니다. "
-            f"편안한 마음으로 면접에 임해주세요."
+            f"먼저, 1분 내외로 자신을 소개해 주시겠어요?"
         )
     else:
-        greeting = (
+        opening = (
             f"안녕하세요, {user.name}님! "
             f"{job.title} 직무 면접에 오신 것을 환영합니다. "
-            f"저는 AI 면접관입니다. 편안한 마음으로 면접에 임해주세요."
+            f"저는 AI 면접관입니다. 편안한 마음으로 면접에 임해주세요. "
+            f"먼저, 1분 내외로 자신을 소개해 주시겠어요?"
         )
 
-    db.add(Transcript(session_id=session.id, sender="ai", content=greeting))
+    db.add(Transcript(session_id=session.id, sender="ai", content=opening))
     db.commit()
+
+    # Generate TTS for the combined opening message
+    opening_audio_url = generate_tts(opening, session.id, 0)
 
     return InterviewStartResponse(
         session_id=session.id,
-        message=greeting,
+        message=opening,
         user_name=user.name,
-        job_title=job.title
+        job_title=job.title,
+        audio_url=opening_audio_url,
     )
 
 
@@ -266,8 +272,8 @@ async def chat(
             Transcript.sender == "human"
         ).count()
 
-        # Turn 7: user answered the closing question → dynamic reply then COMPLETED
-        if human_turn_count >= 7:
+        # Turn 8: user answered the closing question → generate farewell then COMPLETED
+        if human_turn_count >= 8:
             goodbye = ai_service.generate_closing_response(request.user_answer or "")
             db.add(Transcript(session_id=session.id, sender="ai", content=goodbye))
             session.status = SessionStatus.COMPLETED

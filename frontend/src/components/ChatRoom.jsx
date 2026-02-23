@@ -180,9 +180,19 @@ export default function ChatRoom() {
   const messagesEndRef  = useRef(null);
   const hasInitialized  = useRef(false);
   const audioRef        = useRef(null);
-  const canvasRef       = useRef(null);
-  const visionTimerRef  = useRef(null);
-  const userVideoRef    = useRef(null); // left-pane large webcam
+  const canvasRef        = useRef(null);
+  const visionTimerRef   = useRef(null);
+  const mediaStreamRef   = useRef(null);  // always holds the live MediaStream
+
+  // Ref-callback: fires the moment React attaches the <video> DOM node.
+  // This avoids the race where cameraStream state updates before the element exists.
+  const userVideoRef = useCallback((videoEl) => {
+    if (!videoEl) return;
+    if (mediaStreamRef.current) {
+      videoEl.srcObject = mediaStreamRef.current;
+      videoEl.play().catch(() => {});
+    }
+  }, []);
 
   const [messages, setMessages]             = useState([]);
   const [inputValue, setInputValue]         = useState('');
@@ -197,6 +207,7 @@ export default function ChatRoom() {
   const [cameraStream, setCameraStream]     = useState(null);
   const [emotionStats, setEmotionStats]     = useState({}); // { emotion: count } tally
   const [visionAnalyzing, setVisionAnalyzing] = useState(false);
+  const [faceError, setFaceError]           = useState(false); // no face detected
 
   /* smooth scroll */
   const scrollToBottom = useCallback(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, []);
@@ -216,7 +227,36 @@ export default function ChatRoom() {
     audio.play().catch(err => { console.warn('[TTS] play failed:', err); setIsPlaying(false); });
   }, [ttsEnabled]);
 
-  /* ── Webcam startup ─────────────────────────────────────────── */
+  /* ── Frame capture function (standalone, no React state deps) ─── */
+  const captureAndSendFrame = useCallback(async () => {
+    const videoEl = document.getElementById('user-webcam-video');
+    const canvas  = canvasRef.current;
+    if (!canvas || !videoEl || videoEl.readyState < 2 || videoEl.videoWidth === 0) {
+      console.log('[VISION] Frame skip — video not ready (readyState=', videoEl?.readyState, videoEl?.videoWidth, ')');
+      return;
+    }
+    const ctx = canvas.getContext('2d');
+    canvas.width  = videoEl.videoWidth;
+    canvas.height = videoEl.videoHeight;
+    ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+    const b64 = canvas.toDataURL('image/jpeg', 0.75);
+    console.log('[VISION] Sending frame', canvas.width, 'x', canvas.height);
+    setVisionAnalyzing(true);
+    try {
+      const { data } = await axios.post(`${API_BASE_URL}/api/interview/vision`, { image_b64: b64 });
+      console.log('[VISION] Response:', data?.status, data?.dominant_emotion);
+      if (data?.status === 'no_face_detected') {
+        setFaceError(true);
+      } else if (data?.dominant_emotion) {
+        setFaceError(false);
+        setEmotionStats(prev => ({ ...prev, [data.dominant_emotion]: (prev[data.dominant_emotion] || 0) + 1 }));
+      }
+    } catch (err) {
+      console.error('[VISION] POST error:', err?.response?.status, err?.message);
+    } finally { setVisionAnalyzing(false); }
+  }, []);
+
+  /* ── Webcam startup — vision loop started INSIDE getUserMedia resolution ── */
   useEffect(() => {
     let stream;
     const startCamera = async () => {
@@ -224,71 +264,41 @@ export default function ChatRoom() {
         stream = await navigator.mediaDevices.getUserMedia(
           { video: { width: 320, height: 240, facingMode: 'user' }, audio: false }
         );
+
+        // 1. Attach stream to the video DOM element immediately
+        const vid = document.getElementById('user-webcam-video');
+        if (vid) { vid.srcObject = stream; vid.play().catch(() => {}); }
+
+        // 2. Keep refs/state in sync for UI
+        mediaStreamRef.current = stream;
         setCameraStream(stream);
         setCameraActive(true);
+
+        // 3. ✅ Start vision interval DIRECTLY here — bypasses all React state timing
+        if (!visionTimerRef.current) {
+          console.log('✅ VISION LOOP EXPLICITLY STARTED');
+          visionTimerRef.current = setInterval(() => { captureAndSendFrame(); }, VISION_INTERVAL_MS);
+        }
       } catch (e) { console.warn('[VISION] Camera unavailable:', e.message); }
     };
     startCamera();
     return () => {
       stream?.getTracks().forEach(t => t.stop());
-      if (visionTimerRef.current) clearInterval(visionTimerRef.current);
+      mediaStreamRef.current = null;
+      if (visionTimerRef.current) { clearInterval(visionTimerRef.current); visionTimerRef.current = null; }
     };
-  }, []);
+  }, [captureAndSendFrame]);
 
-  /* ── Bind cameraStream to the left-pane video element ────── */
+  /* ── Re-attach stream on hot-reload / state change (belt-and-suspenders) ── */
   useEffect(() => {
-    const vid = userVideoRef.current;
-    if (!vid) return;
-    if (cameraStream) {
+    const vid = document.getElementById('user-webcam-video');
+    if (!vid || !cameraStream) return;
+    if (vid.srcObject !== cameraStream) {
       vid.srcObject = cameraStream;
       vid.play().catch(() => {});
-    } else {
-      vid.srcObject = null;
     }
   }, [cameraStream]);
 
-  /* ── Vision capture loop (every 3 s) ─────────────────────── */
-  useEffect(() => {
-    if (!cameraActive || !cameraStream) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    // Dedicated off-screen video for frame capture
-    const capVid = document.createElement('video');
-    capVid.srcObject = cameraStream;
-    capVid.muted = true;
-    capVid.playsInline = true;
-    capVid.play().catch(() => {});
-
-    visionTimerRef.current = setInterval(async () => {
-      if (capVid.readyState < 2) return;
-
-      const ctx = canvas.getContext('2d');
-      canvas.width  = capVid.videoWidth  || 320;
-      canvas.height = capVid.videoHeight || 240;
-      ctx.drawImage(capVid, 0, 0, canvas.width, canvas.height);
-      const b64 = canvas.toDataURL('image/jpeg', 0.75);
-
-      setVisionAnalyzing(true);
-      try {
-        const { data } = await axios.post(`${API_BASE_URL}/api/interview/vision`, { image_b64: b64 });
-        console.log('[VISION] response:', data);
-        if (data?.dominant_emotion && data.status !== 'no_face_detected') {
-          setEmotionStats(prev => ({
-            ...prev,
-            [data.dominant_emotion]: (prev[data.dominant_emotion] || 0) + 1
-          }));
-        }
-      } catch (err) {
-        console.warn('[VISION] POST failed:', err?.message);
-      } finally { setVisionAnalyzing(false); }
-    }, VISION_INTERVAL_MS);
-
-    return () => {
-      clearInterval(visionTimerRef.current);
-      capVid.srcObject = null;
-    };
-  }, [cameraActive, cameraStream]);
 
   /* ── First question ─────────────────────────────────────────── */
   const getFirstQuestion = useCallback(async () => {
@@ -332,7 +342,16 @@ export default function ChatRoom() {
 
         const formatted = transcriptItems.map(t => ({ sender: t?.sender ?? 'ai', content: t?.content ?? '', timestamp: t?.timestamp ?? new Date().toISOString() }));
         setMessages(formatted);
-        const alreadyHasQ = formatted.some(m => m.sender === 'ai' && String(m.content).includes('자기소개'));
+
+        // Auto-play greeting TTS if InterviewSetup stored an audio_url for this session
+        const greetingAudioUrl = sessionStorage.getItem(`greeting_audio_${sessionId}`);
+        if (greetingAudioUrl) {
+          sessionStorage.removeItem(`greeting_audio_${sessionId}`);
+          playAudio(greetingAudioUrl);
+        }
+
+        const alreadyHasQ = formatted.some(m => m.sender === 'ai' &&
+          (String(m.content).includes('자기소개') || String(m.content).includes('자신을 소개')));
         if (!alreadyHasQ) await getFirstQuestion();
       } catch (err) {
         const status = err?.response?.status;
@@ -354,11 +373,9 @@ export default function ChatRoom() {
     appendMsg({ sender: 'human', content: answer, timestamp: new Date().toISOString() });
     setIsLoading(true);
 
-    // Convert emotionStats counts to percentages for the backend
+    // Send raw emotion counts — backend formula works directly with counts
     const total_samples = Object.values(emotionStats).reduce((s, c) => s + c, 0);
-    const vision_data = total_samples > 0
-      ? Object.fromEntries(Object.entries(emotionStats).map(([k, v]) => [k, parseFloat(((v / total_samples) * 100).toFixed(1))]))
-      : null;
+    const vision_data = total_samples > 0 ? { ...emotionStats } : null;
 
     try {
       const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, {
@@ -375,6 +392,12 @@ export default function ChatRoom() {
       }
       if ((data?.category?.includes('면접 종료') || data?.category?.includes('CLOSING'))
           && data?.next_question?.includes('종료') && !data?.evaluation) {
+        // Stop vision loop immediately — interview is done
+        if (visionTimerRef.current) {
+          clearInterval(visionTimerRef.current);
+          visionTimerRef.current = null;
+          console.log('🛑 Vision loop stopped on interview end.');
+        }
         setIsCompleted(true);
       }
     } catch (err) {
@@ -387,6 +410,12 @@ export default function ChatRoom() {
 
   const handleEnd = async () => {
     if (!window.confirm('면접을 종료하시겠습니까?')) return;
+    // Stop vision loop immediately
+    if (visionTimerRef.current) {
+      clearInterval(visionTimerRef.current);
+      visionTimerRef.current = null;
+      console.log('🛑 Vision loop stopped on handleEnd.');
+    }
     try { await axios.post(`${API_BASE_URL}/api/interview/session/${sessionId}/end`); navigate('/'); }
     catch { setError('면접 종료에 실패했습니다.'); }
   };
@@ -486,36 +515,46 @@ export default function ChatRoom() {
 
         {/* User webcam */}
         <div className="w-full flex-1 flex flex-col items-center min-h-0">
-          {visionAnalyzing && (
-            <div className="flex items-center space-x-1.5 text-xs text-blue-400 animate-pulse mb-2">
-              <span className="w-2 h-2 bg-blue-400 rounded-full" />
-              <span>감정 분석 중...</span>
+          {/* Fixed-height emotion stats row — reserves space so layout never shifts */}
+          <div className="h-8 flex items-center justify-start text-sm text-gray-300 font-mono tabular-nums overflow-hidden">
+            {Object.keys(emotionStats).length > 0
+              ? Object.entries(emotionStats)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 4)
+                  .map(([em, cnt]) => `${em} ${cnt}`)
+                  .join(' | ')
+              : <span className="text-slate-600 text-xs">대기 중...​</span>
+            }
+          </div>
+
+          {/* Static vision status badge — never toggles so layout stays stable */}
+          {cameraActive && (
+            <div className="flex items-center space-x-1.5 text-xs text-red-400 mb-1">
+              <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              <span>실시간 비전 분석 작동 중</span>
             </div>
           )}
-          {Object.keys(emotionStats).length > 0 && (
-            <div className="flex flex-wrap gap-1 mb-2 justify-center">
-              {Object.entries(emotionStats)
-                .sort((a, b) => b[1] - a[1])
-                .slice(0, 3)
-                .map(([em, cnt]) => (
-                  <span key={em} className="text-xs bg-slate-700 text-slate-300 px-2 py-0.5 rounded-full">
-                    {em} {cnt}
-                  </span>
-                ))
-              }
-            </div>
-          )}
-          <div className={`relative w-full rounded-xl overflow-hidden border-2 transition-colors flex-1 min-h-0 ${
+          <div className={`relative w-full rounded-xl overflow-hidden border-2 transition-colors bg-slate-900 ${
             cameraActive ? 'border-green-500/60' : 'border-slate-700'
-          }`} style={{ maxHeight: '220px' }}>
+          }`} style={{ height: '38vh', minHeight: '200px', maxHeight: '340px' }}>
             <video
+              id="user-webcam-video"
               ref={userVideoRef}
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover"
+              className="w-full h-full object-contain"
               style={{ transform: 'scaleX(-1)' }}
             />
+            {/* No-face detected overlay */}
+            {faceError && cameraActive && (
+              <div className="absolute inset-0 bg-black/75 flex flex-col items-center justify-center z-20 rounded-xl">
+                <span className="text-3xl mb-2">👤❌</span>
+                <p className="text-white text-xs text-center px-4 leading-relaxed">
+                  카메라에 얼굴 인식이<br/>제대로 이루어지지 않고 있습니다.
+                </p>
+              </div>
+            )}
             {!cameraActive && (
               <div className="absolute inset-0 bg-slate-800 flex flex-col items-center justify-center">
                 <svg className="w-8 h-8 text-slate-600 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -531,6 +570,7 @@ export default function ChatRoom() {
               <span className={`w-1.5 h-1.5 rounded-full ${cameraActive ? 'bg-white animate-pulse' : 'bg-slate-500'}`} />
               <span>{cameraActive ? 'LIVE' : 'OFF'}</span>
             </div>
+
             {Object.values(emotionStats).reduce((a, b) => a + b, 0) > 0 && (
               <div className="absolute bottom-2 right-2 text-xs bg-black/50 text-slate-300 px-1.5 py-0.5 rounded">
                 📷 {Object.values(emotionStats).reduce((a, b) => a + b, 0)}샘플

@@ -82,6 +82,10 @@ export default function InterviewSetup() {
         formData,
         { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 }
       );
+      // Store greeting audio_url so ChatRoom can auto-play it on mount
+      if (data.audio_url) {
+        sessionStorage.setItem(`greeting_audio_${data.session_id}`, data.audio_url);
+      }
       navigate(`/interview/${data.session_id}`);
     } catch (err) {
       if (!err.response) {
@@ -102,6 +106,25 @@ export default function InterviewSetup() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
       {toast && <Toast message={toast} onClose={() => setToast('')} />}
+
+      {/* ── Full-screen loading overlay ── */}
+      {loading && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center space-y-6">
+          <div className="relative w-20 h-20">
+            <div className="absolute inset-0 rounded-full border-4 border-blue-200/30" />
+            <div className="absolute inset-0 rounded-full border-4 border-blue-400 border-t-transparent animate-spin" />
+            <div className="absolute inset-2 rounded-full border-4 border-indigo-300/20" />
+            <div className="absolute inset-2 rounded-full border-4 border-indigo-400 border-b-transparent animate-spin" style={{ animationDirection: 'reverse', animationDuration: '0.8s' }} />
+          </div>
+          <div className="text-center space-y-2">
+            <p className="text-white font-semibold text-lg">면접이 곧 진행될 예정입니다.</p>
+            <p className="text-blue-200 text-sm">잠시만 기다려 주세요...</p>
+            {loadingMsg && (
+              <p className="text-slate-400 text-xs animate-pulse mt-1">{loadingMsg}</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
 

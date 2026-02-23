@@ -35,3 +35,11 @@ body {
 .prose pre {
   margin: 0.5rem 0;
 }
+
+/* ── Print / PDF Export ── */
+@media print {
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
