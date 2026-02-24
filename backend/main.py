@@ -10,7 +10,7 @@ from database import engine, get_db, Base
 from models import User, JobPosting, InterviewSession, Transcript, EvaluationReport, QuestionBank
 
 # Import routers
-from routers import recruit, candidate, interview, admin, vision
+from routers import recruit, candidate, interview, admin, vision, auth
 
 app = FastAPI(
     title="AI Interview System API",
@@ -98,10 +98,15 @@ app.include_router(candidate.router)
 app.include_router(interview.router)
 app.include_router(admin.router, prefix="/api/admin")
 app.include_router(vision.router)
+app.include_router(auth.router)
 
 # Serve generated TTS audio files as static files
 os.makedirs("uploads/audio", exist_ok=True)
 app.mount("/static/audio", StaticFiles(directory="uploads/audio"), name="audio")
+
+# Serve uploaded resume PDF files as static files
+os.makedirs("uploads/resumes", exist_ok=True)
+app.mount("/static/resumes", StaticFiles(directory="uploads/resumes"), name="resumes")
 
 
 if __name__ == "__main__":

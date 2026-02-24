@@ -2,7 +2,7 @@
 Candidate API Router
 Handles user registration and resume management
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
@@ -176,6 +176,7 @@ async def get_user_resume(
         "name": user.name,
         "email": user.email,
         "resume_text": user.resume_text,
+        "resume_path": getattr(user, "resume_path", None),
         "uploaded_at": user.created_at
     }
 
@@ -222,3 +223,94 @@ async def get_user_interviews(
         })
     return result
 
+
+@router.post("/resume/parse")
+async def parse_resume_pdf(file: UploadFile = File(...)):
+    """
+    Parse a PDF resume and return extracted text (temp file, no DB save).
+    Frontend populates textarea; user edits then saves separately.
+    """
+    import uuid, shutil
+    from pathlib import Path
+    from routers.interview import parse_pdf
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF 파일만 업로드할 수 있습니다.")
+
+    tmp_dir = Path("uploads/tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"{uuid.uuid4().hex}_{file.filename}"
+    try:
+        with tmp_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+        text = parse_pdf(str(tmp_path))
+    finally:
+        await file.close()
+        try: tmp_path.unlink()
+        except Exception: pass
+
+    if not text:
+        raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다. 스캔본 PDF는 지원되지 않습니다.")
+
+    return {"text": text}
+
+
+@router.post("/resume/upload")
+async def upload_resume_pdf(
+    user_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload PDF resume: saves file to disk, extracts text, stores both in DB.
+    Returns resume_path (relative URL) so frontend can show a preview link.
+    """
+    import uuid, shutil
+    from pathlib import Path
+    from routers.interview import parse_pdf
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF 파일만 업로드할 수 있습니다.")
+
+    # Save PDF to a permanent location
+    save_dir = Path(f"uploads/resumes/{user_id}")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    # Use a fixed filename per user (overwrites previous) so they have one resume
+    safe_name = f"resume_{uuid.uuid4().hex[:8]}.pdf"
+    save_path = save_dir / safe_name
+
+    try:
+        with save_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+        text = parse_pdf(str(save_path))
+    finally:
+        await file.close()
+
+    if not text:
+        save_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출하지 못했습니다.")
+
+    # Remove previous PDF if any
+    old_path = getattr(user, "resume_path", None)
+    if old_path:
+        old_file = Path(old_path.lstrip("/").replace("static/resumes", f"uploads/resumes/{user_id}"))
+        if old_file.exists() and old_file != save_path:
+            try: old_file.unlink()
+            except Exception: pass
+
+    # Persist to DB
+    url_path = f"/static/resumes/{user_id}/{safe_name}"
+    user.resume_text = text
+    user.resume_path = url_path
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "text": text,
+        "resume_path": url_path,
+        "filename": file.filename,
+    }

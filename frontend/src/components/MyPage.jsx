@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -46,22 +46,34 @@ function Tab({ label, icon, active, onClick }) {
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function MyPage() {
   const navigate = useNavigate();
+  const pdfInputRef = useRef(null);
 
-  /* ─── Identity (simple session — no auth) ────────────────────────────── */
-  const [userId, setUserId]         = useState(() => sessionStorage.getItem('mypage_uid') || '');
-  const [userInfo, setUserInfo]     = useState(null);
-  const [idInput, setIdInput]       = useState('');
-  const [idError, setIdError]       = useState('');
+  /* ─── Auth: read from localStorage (set by Login.jsx) ─────────────────── */
+  const storedAuth = (() => {
+    try { return JSON.parse(localStorage.getItem('auth_user') || 'null'); }
+    catch { return null; }
+  })();
+
+  const [userInfo, setUserInfo]     = useState(storedAuth);  // {id, name, email, role, ...}
+  const userId                      = storedAuth?.id ?? null;
 
   /* ─── UI state ────────────────────────────────────────────────────────── */
-  const [tab, setTab]               = useState('resume');   // 'resume' | 'jobs' | 'history'
+  const [tab, setTab]               = useState('resume');
   const [toast, setToast]           = useState(null);
 
-  /* ─── Data ────────────────────────────────────────────────────────────── */
+  /* ─── Resume state ───────────────────────────────────────────────────────── */
   const [resume, setResume]         = useState('');
+  const [resumePath, setResumePath] = useState(null);  // URL path to stored PDF
+  const [resumeFilename, setResumeFilename] = useState(null);
   const [savingResume, setSavingResume] = useState(false);
+  const [parsingPdf, setParsingPdf] = useState(false);
+
+  /* ─── Jobs state ──────────────────────────────────────────────────────── */
   const [jobs, setJobs]             = useState([]);
   const [jobSearch, setJobSearch]   = useState('');
+  const [startingJob, setStartingJob] = useState(null);  // job.id being started
+
+  /* ─── History state ───────────────────────────────────────────────────── */
   const [history, setHistory]       = useState([]);
   const [historySortDesc, setHistorySortDesc] = useState(true);
 
@@ -70,33 +82,18 @@ export default function MyPage() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  /* ─── Load user info ─────────────────────────────────────────────────── */
-  const loadUser = useCallback(async (uid) => {
-    try {
-      const { data } = await axios.get(`${API_BASE_URL}/api/candidate/users/${uid}`);
-      setUserInfo(data);
-      sessionStorage.setItem('mypage_uid', uid);
-      // Load resume
-      try {
-        const r = await axios.get(`${API_BASE_URL}/api/candidate/users/${uid}/resume`);
-        setResume(r.data.resume_text || '');
-      } catch { setResume(''); }
-    } catch {
-      setIdError('해당 ID의 사용자를 찾을 수 없습니다.');
-      setUserInfo(null);
-    }
-  }, []);
-
+  /* ─── Redirect to /login if not authenticated ─────────────────────────── */
   useEffect(() => {
-    if (userId) loadUser(userId);
-  }, [userId, loadUser]);
+    if (!userId) navigate('/login', { replace: true });
+  }, [userId, navigate]);
 
   /* ─── Load jobs & history on tab change ──────────────────────────────── */
   useEffect(() => {
     if (!userInfo) return;
     if (tab === 'jobs') {
+      // Only show ACTIVE jobs on the candidate job board
       axios.get(`${API_BASE_URL}/api/admin/jobs`)
-        .then(r => setJobs(r.data))
+        .then(r => setJobs(r.data.filter(j => j.status === 'ACTIVE')))
         .catch(() => showToast('공고를 불러오지 못했습니다.', 'error'));
     }
     if (tab === 'history') {
@@ -106,12 +103,20 @@ export default function MyPage() {
     }
   }, [tab, userInfo, userId]);
 
-  /* ─── Handlers ───────────────────────────────────────────────────────── */
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setIdError('');
-    setUserId(idInput.trim());
-  };
+  /* ─── Load resume on mount ─────────────────────────────────────────────── */
+  useEffect(() => {
+    if (!userId) return;
+    axios.get(`${API_BASE_URL}/api/candidate/users/${userId}/resume`)
+      .then(r => {
+        setResume(r.data.resume_text || '');
+        if (r.data.resume_path) {
+          setResumePath(r.data.resume_path);
+          // Extract filename from path
+          setResumeFilename(r.data.resume_path.split('/').pop());
+        }
+      })
+      .catch(() => {});
+  }, [userId]);
 
   const handleSaveResume = async () => {
     if (!resume.trim()) { showToast('이력서 내용을 입력해주세요.', 'error'); return; }
@@ -127,17 +132,52 @@ export default function MyPage() {
     } finally { setSavingResume(false); }
   };
 
-  const handleStartInterview = async (job) => {
-    try {
-      const { data } = await axios.post(`${API_BASE_URL}/api/interview/sessions`, {
-        user_id: parseInt(userId, 10),
-        job_posting_id: job.id,
-        resume_text: resume || undefined,
-      });
-      navigate(`/interview/${data.session_id ?? data.id}`);
-    } catch (err) {
-      showToast(err.response?.data?.detail ?? '면접 시작 실패.', 'error');
+  /* PDF upload: saves file permanently, extracts text, updates DB */
+  const handlePdfUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      showToast('PDF 파일만 업로드할 수 있습니다.', 'error');
+      return;
     }
+    setParsingPdf(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await axios.post(
+        `${API_BASE_URL}/api/candidate/resume/upload?user_id=${userId}`,
+        fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+      setResume(data.text || '');
+      setResumePath(data.resume_path || null);
+      setResumeFilename(data.filename || file.name);
+      showToast('PDF가 저장되었습니다. 텍스트를 확인 후 저장하세요.');
+    } catch (err) {
+      showToast(err.response?.data?.detail ?? 'PDF 파싱 실패.', 'error');
+    } finally {
+      setParsingPdf(false);
+      if (pdfInputRef.current) pdfInputRef.current.value = '';
+    }
+  };
+
+  /* Issue 3: use /api/interview/start with multipart FormData */
+  const handleStartInterview = async (job) => {
+    setStartingJob(job.id);
+    try {
+      const fd = new FormData();
+      fd.append('user_id', parseInt(userId, 10));
+      fd.append('job_id', job.id);
+      // resume file is optional; the backend already pulls resume_text from session
+      const { data } = await axios.post(
+        `${API_BASE_URL}/api/interview/start`,
+        fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+      navigate(`/interview/${data.session_id}`);
+    } catch (err) {
+      showToast(err.response?.data?.detail ?? '면접 시작 실패. 잠시 후 다시 시도해주세요.', 'error');
+    } finally { setStartingJob(null); }
   };
 
   /* ─── Derived ─────────────────────────────────────────────────────────── */
@@ -153,42 +193,14 @@ export default function MyPage() {
   );
 
   /* ═══════════════════════════════════════════════════════════════════════
-     IDENTITY GATE
+     AUTH GUARD — redirect to login if not logged in
   ═══════════════════════════════════════════════════════════════════════ */
   if (!userInfo) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-slate-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm space-y-6">
-          <div className="text-center">
-            <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-3">
-              <span className="text-3xl">👤</span>
-            </div>
-            <h1 className="text-xl font-bold text-gray-900">마이페이지</h1>
-            <p className="text-gray-500 text-sm mt-1">사용자 ID를 입력해 로그인하세요</p>
-          </div>
-          <form onSubmit={handleLogin} className="space-y-3">
-            <input
-              type="number" min="1"
-              value={idInput}
-              onChange={e => setIdInput(e.target.value)}
-              placeholder="User ID (예: 1)"
-              className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              required
-            />
-            {idError && <p className="text-red-500 text-xs">{idError}</p>}
-            <button
-              type="submit"
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl py-2.5 text-sm transition"
-            >
-              입장하기
-            </button>
-          </form>
-          <button
-            onClick={() => navigate('/')}
-            className="w-full text-gray-400 text-xs hover:text-gray-600 text-center"
-          >
-            ← 홈으로
-          </button>
+        <div className="text-center text-gray-500">
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-sm">로그인 페이지로 이동 중...</p>
         </div>
       </div>
     );
@@ -221,7 +233,7 @@ export default function MyPage() {
               홈
             </button>
             <button
-              onClick={() => { sessionStorage.removeItem('mypage_uid'); setUserId(''); setUserInfo(null); setIdInput(''); }}
+              onClick={() => { localStorage.removeItem('auth_user'); navigate('/login', { replace: true }); }}
               className="text-sm text-red-400 hover:text-red-600 border border-red-200 rounded-lg px-3 py-1.5 transition"
             >
               로그아웃
@@ -234,9 +246,9 @@ export default function MyPage() {
 
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
         <div className="flex gap-2 mb-8">
-          <Tab label="이력서 관리"       icon="📄" active={tab === 'resume'}  onClick={() => setTab('resume')} />
-          <Tab label="채용 공고"         icon="🏢" active={tab === 'jobs'}    onClick={() => setTab('jobs')} />
-          <Tab label="면접 히스토리"     icon="📊" active={tab === 'history'} onClick={() => setTab('history')} />
+          <Tab label="이력서 관리"   icon="📄" active={tab === 'resume'}  onClick={() => setTab('resume')} />
+          <Tab label="채용 공고"     icon="🏢" active={tab === 'jobs'}    onClick={() => setTab('jobs')} />
+          <Tab label="면접 히스토리" icon="📊" active={tab === 'history'} onClick={() => setTab('history')} />
         </div>
 
         {/* ══════════════════════════════════════════════════════════════
@@ -254,11 +266,62 @@ export default function MyPage() {
               </span>
             </div>
 
+            {/* PDF preview link — shown when a resume PDF has been saved */}
+            {resumePath && (
+              <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                <span className="text-2xl">📄</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-emerald-800 truncate">{resumeFilename || 'resume.pdf'}</p>
+                  <p className="text-xs text-emerald-600">저장된 PDF 이력서</p>
+                </div>
+                <a
+                  href={`${API_BASE_URL}${resumePath}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-emerald-700 border border-emerald-300 rounded-lg hover:bg-emerald-100 transition"
+                >
+                  PDF 보기 →
+                </a>
+              </div>
+            )}
+
+            {/* PDF upload button */}
+            <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              <span className="text-2xl">📎</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-700">PDF 이력서 업로드</p>
+                <p className="text-xs text-slate-500">PDF를 업로드하면 텍스트가 자동으로 추출됩니다.</p>
+              </div>
+              <input
+                ref={pdfInputRef}
+                type="file"
+                accept=".pdf"
+                onChange={handlePdfUpload}
+                className="hidden"
+                id="pdf-resume-input"
+              />
+              <label
+                htmlFor="pdf-resume-input"
+                className={`cursor-pointer inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition
+                  ${parsingPdf
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
+                  }`}
+              >
+                {parsingPdf ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block" />
+                    추출 중...
+                  </>
+                ) : '파일 선택'}
+              </label>
+            </div>
+
             <textarea
               value={resume}
               onChange={e => setResume(e.target.value)}
-              placeholder={"이름 / 학교 / 경력 / 기술스택 등을 자유 형식으로 입력하세요.\n\n예시:\n이름: 김개발\n경력: FastAPI 3년, React 2년\n기술: Python, PostgreSQL, Docker"}
-              rows={14}
+              placeholder={"이름 / 학교 / 경력 / 기술스택 등을 자유 형식으로 입력하세요.\n또는 위의 PDF 업로드 버튼을 사용해보세요.\n\n예시:\n이름: 김개발\n경력: FastAPI 3년, React 2년\n기술: Python, PostgreSQL, Docker"}
+              rows={13}
               className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none leading-relaxed"
             />
 
@@ -280,7 +343,6 @@ export default function MyPage() {
         ══════════════════════════════════════════════════════════════ */}
         {tab === 'jobs' && (
           <div className="space-y-5">
-            {/* Search bar */}
             <div className="relative">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
               <input
@@ -314,9 +376,15 @@ export default function MyPage() {
                     </div>
                     <button
                       onClick={() => handleStartInterview(job)}
-                      className="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-semibold py-2.5 rounded-xl transition-all shadow-sm"
+                      disabled={startingJob === job.id}
+                      className="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-semibold py-2.5 rounded-xl transition-all shadow-sm disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                     >
-                      지원 및 면접 시작하기 →
+                      {startingJob === job.id ? (
+                        <>
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          면접 준비 중...
+                        </>
+                      ) : '지원 및 면접 시작하기 →'}
                     </button>
                   </div>
                 ))}

@@ -37,8 +37,10 @@ class User(Base):
     name = Column(String(255), nullable=False)
     phone = Column(String(50), nullable=True)
     birth_date = Column(Date, nullable=True)
+    address = Column(String(255), nullable=True)
     role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.CANDIDATE)
     resume_text = Column(Text, nullable=True)  # Resume content in text format
+    resume_path = Column(String(512), nullable=True)  # Path to uploaded PDF resume
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

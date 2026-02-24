@@ -379,6 +379,24 @@ export default function ChatRoom() {
     init();
   }, [sessionId, getFirstQuestion]);
 
+  /* ── Initial-message TTS: play greeting audio when messages first populate ── */
+  const initialAudioFiredRef = useRef(false);
+  useEffect(() => {
+    // Only fire once, and only when messages are freshly loaded (not on every render)
+    if (initialAudioFiredRef.current || messages.length === 0) return;
+    // Check if this looks like a session that was resumed (already has user replies)
+    const hasUserMsg = messages.some(m => m.sender === 'human');
+    if (hasUserMsg) { initialAudioFiredRef.current = true; return; }
+    // Find the first AI message that has an audio_url via sessionStorage key set by InterviewSetup
+    const greetingAudio = sessionStorage.getItem(`greeting_audio_${sessionId}`);
+    if (greetingAudio) {
+      initialAudioFiredRef.current = true;
+      sessionStorage.removeItem(`greeting_audio_${sessionId}`);
+      playAudio(greetingAudio);
+    }
+  }, [messages, sessionId, playAudio]);
+
+
 
   /* ── Send answer ────────────────────────────────────────────── */
   const handleSend = async (e) => {

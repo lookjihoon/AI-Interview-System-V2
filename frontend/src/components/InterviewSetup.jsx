@@ -137,7 +137,7 @@ export default function InterviewSetup() {
             </svg>
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-1">AI Interview</h1>
-          <p className="text-gray-500 text-sm">LangChain · RAG · llama3.1</p>
+          <p className="text-gray-500 text-sm">LangChain · RAG · EXAONE 3.5</p>
         </div>
 
         <form onSubmit={handleStart} className="space-y-5">
@@ -260,7 +260,7 @@ export default function InterviewSetup() {
         <div className="mt-6 flex justify-between items-center">
           <p className="text-xs text-gray-400">Powered by FastAPI · React · pgvector</p>
           <div className="flex gap-3">
-            <a href="/mypage" className="text-xs text-indigo-500 hover:text-indigo-700 font-medium">마이페이지 →</a>
+            <a href="/login"  className="text-xs text-indigo-500 hover:text-indigo-700 font-medium">마이페이지 →</a>
             <a href="/admin"  className="text-xs text-blue-500  hover:text-blue-700 font-medium">관리자 →</a>
           </div>
         </div>

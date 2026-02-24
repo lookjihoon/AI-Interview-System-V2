@@ -50,6 +50,13 @@ function TabBtn({ label, icon, active, onClick }) {
   );
 }
 
+/* ── Status filter segments ──────────────────────────────────────────────── */
+const STATUS_FILTERS = [
+  { value: 'ALL',    label: '전체' },
+  { value: 'ACTIVE', label: '진행중' },
+  { value: 'CLOSED', label: '마감' },
+];
+
 /* ── Empty form ──────────────────────────────────────────────────────────── */
 const EMPTY = { title:'', description:'', requirements:'', min_experience:0, conditions:'', procedures:'', application_method:'' };
 
@@ -65,6 +72,7 @@ export default function AdminDashboard() {
 
   /* ─── Jobs tab ────────────────────────────────────────────────────────── */
   const [jobs, setJobs]           = useState([]);
+  const [statusFilter, setStatusFilter] = useState('ALL');   // 'ALL' | 'ACTIVE' | 'CLOSED'
   const [form, setForm]           = useState(EMPTY);
   const [editId, setEditId]       = useState(null);       // null = create mode, number = edit mode
   const [submitting, setSubmitting] = useState(false);
@@ -72,7 +80,7 @@ export default function AdminDashboard() {
   /* ─── Leaderboard tab ─────────────────────────────────────────────────── */
   const [selectedJob, setSelectedJob]     = useState(null);
   const [applicants, setApplicants]       = useState([]);
-  const [applicantSort, setApplicantSort] = useState('total_score'); // column key
+  const [applicantSort, setApplicantSort] = useState('total_score');
   const [sortDesc, setSortDesc]           = useState(true);
   const [loadingApplicants, setLoadingApplicants] = useState(false);
 
@@ -81,7 +89,7 @@ export default function AdminDashboard() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  /* ─── Fetch all jobs (both tabs need this) ────────────────────────────── */
+  /* ─── Fetch all jobs ──────────────────────────────────────────────────── */
   const fetchJobs = useCallback(async () => {
     try {
       const { data } = await axios.get(`${API_BASE_URL}/api/admin/jobs`);
@@ -92,6 +100,14 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  /* ─── Derived: filtered job list ─────────────────────────────────────── */
+  const filteredJobs = jobs.filter(j => {
+    if (statusFilter === 'ALL')    return true;
+    if (statusFilter === 'ACTIVE') return j.status === 'ACTIVE';
+    if (statusFilter === 'CLOSED') return j.status === 'CLOSED';
+    return true;
+  });
 
   /* ─── Form helpers ────────────────────────────────────────────────────── */
   const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
@@ -133,11 +149,17 @@ export default function AdminDashboard() {
     } finally { setSubmitting(false); }
   };
 
-  /* ─── Delete / Copy ───────────────────────────────────────────────────── */
-  const handleDelete = async (id) => {
+  /* ─── Close / Reopen / Copy ───────────────────────────────────────────── */
+  const handleClose = async (id) => {
     if (!window.confirm(`JD #${id}를 마감하시겠습니까?`)) return;
     await axios.delete(`${API_BASE_URL}/api/admin/jobs/${id}`);
     showToast('공고가 마감되었습니다.');
+    fetchJobs();
+  };
+
+  const handleReopen = async (id) => {
+    await axios.patch(`${API_BASE_URL}/api/admin/jobs/${id}/reopen`);
+    showToast('공고가 다시 열렸습니다.');
     fetchJobs();
   };
 
@@ -193,7 +215,7 @@ export default function AdminDashboard() {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">Admin Dashboard</h1>
-              <p className="text-slate-500 text-sm">채용 공고 관리 · 지원자 现황</p>
+              <p className="text-slate-500 text-sm">채용 공고 관리 · 지원자 현황</p>
             </div>
           </div>
           <button
@@ -206,8 +228,8 @@ export default function AdminDashboard() {
 
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
         <div className="flex gap-2 mb-8">
-          <TabBtn label="공고 관리"       icon="📋" active={tab === 'jobs'}        onClick={() => setTab('jobs')} />
-          <TabBtn label="지원자 랭킹"     icon="🏆" active={tab === 'leaderboard'} onClick={() => setTab('leaderboard')} />
+          <TabBtn label="공고 관리"     icon="📋" active={tab === 'jobs'}        onClick={() => setTab('jobs')} />
+          <TabBtn label="지원자 랭킹"   icon="🏆" active={tab === 'leaderboard'} onClick={() => setTab('leaderboard')} />
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
@@ -268,24 +290,41 @@ export default function AdminDashboard() {
             <div className="lg:col-span-3">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-base font-semibold text-slate-200">
-                  등록된 공고 <span className="text-indigo-400">({jobs.length})</span>
+                  등록된 공고 <span className="text-indigo-400">({filteredJobs.length} / {jobs.length})</span>
                 </h2>
-                <button onClick={fetchJobs}
-                  className="text-xs text-slate-500 hover:text-slate-300 border border-slate-700 hover:border-slate-500 rounded-lg px-3 py-1.5 transition"
-                >새로고침</button>
+                <div className="flex items-center gap-2">
+                  {/* Status filter */}
+                  <div className="flex items-center bg-slate-800 rounded-lg p-1 gap-1">
+                    {STATUS_FILTERS.map(f => (
+                      <button key={f.value} onClick={() => setStatusFilter(f.value)}
+                        className={`px-3 py-1 text-xs font-semibold rounded-md transition
+                          ${statusFilter === f.value
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-400 hover:text-white'
+                          }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button onClick={fetchJobs}
+                    className="text-xs text-slate-500 hover:text-slate-300 border border-slate-700 hover:border-slate-500 rounded-lg px-3 py-1.5 transition"
+                  >↺</button>
+                </div>
               </div>
 
-              {jobs.length === 0 ? (
+              {filteredJobs.length === 0 ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-10 text-center text-slate-500">
-                  <p className="text-sm">등록된 공고가 없습니다.</p>
+                  <p className="text-sm">표시할 공고가 없습니다.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {jobs.map(job => (
+                  {filteredJobs.map(job => (
                     <JobCard
                       key={job.id} job={job}
                       onEdit={() => startEdit(job)}
-                      onDelete={() => handleDelete(job.id)}
+                      onClose={() => handleClose(job.id)}
+                      onReopen={() => handleReopen(job.id)}
                       onCopy={() => handleCopy(job.id)}
                       onLeaderboard={() => { setTab('leaderboard'); loadApplicants(job); }}
                     />
@@ -314,10 +353,13 @@ export default function AdminDashboard() {
                     className={`px-4 py-2 rounded-lg text-sm font-medium border transition
                       ${selectedJob?.id === j.id
                         ? 'bg-indigo-600 border-indigo-500 text-white'
-                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-indigo-500 hover:text-white'
+                        : j.status === 'closed'
+                          ? 'bg-slate-800/50 border-slate-700 text-slate-500 hover:border-slate-500'
+                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-indigo-500 hover:text-white'
                       }`}
                   >
                     JD #{j.id} · {j.title}
+                    {j.status === 'closed' && <span className="ml-2 text-xs text-red-400">[마감]</span>}
                   </button>
                 ))}
               </div>
@@ -428,14 +470,30 @@ export default function AdminDashboard() {
 }
 
 /* ── JobCard ─────────────────────────────────────────────────────────────── */
-function JobCard({ job, onEdit, onDelete, onCopy, onLeaderboard }) {
+function JobCard({ job, onEdit, onClose, onReopen, onCopy, onLeaderboard }) {
   const [open, setOpen] = useState(false);
+  const isClosed = job.status === 'CLOSED';
+
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 hover:border-indigo-500/50 transition">
+    <div className={`border rounded-xl p-5 transition
+      ${isClosed
+        ? 'bg-slate-900/60 border-slate-800 opacity-70'
+        : 'bg-slate-800 border-slate-700 hover:border-indigo-500/50'
+      }`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
-          <p className="text-xs text-indigo-400 font-mono mb-1">JD #{job.id}</p>
-          <h3 className="text-base font-semibold text-white truncate">{job.title}</h3>
+          <div className="flex items-center gap-2 mb-1">
+            <p className="text-xs text-indigo-400 font-mono">JD #{job.id}</p>
+            {isClosed && (
+              <span className="text-xs font-semibold bg-red-900/40 text-red-400 border border-red-800/50 rounded px-1.5 py-0.5">
+                마감됨
+              </span>
+            )}
+          </div>
+          <h3 className={`text-base font-semibold truncate ${isClosed ? 'text-slate-500' : 'text-white'}`}>
+            {job.title}
+          </h3>
           <p className="text-slate-500 text-xs mt-1">경력 {job.min_experience}년 이상</p>
         </div>
         <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
@@ -443,22 +501,38 @@ function JobCard({ job, onEdit, onDelete, onCopy, onLeaderboard }) {
             className="text-xs text-slate-400 hover:text-white border border-slate-600 hover:border-slate-400 rounded-lg px-3 py-1.5 transition">
             {open ? '접기' : '상세'}
           </button>
-          <button onClick={onEdit}
-            className="text-xs text-blue-400 hover:text-blue-200 border border-blue-800 hover:border-blue-500 rounded-lg px-3 py-1.5 transition">
-            수정
-          </button>
-          <button onClick={onCopy}
-            className="text-xs text-slate-400 hover:text-white border border-slate-600 hover:border-slate-400 rounded-lg px-3 py-1.5 transition">
-            복사
-          </button>
-          <button onClick={onLeaderboard}
-            className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-800 hover:border-emerald-500 rounded-lg px-3 py-1.5 transition">
-            지원자 보기
-          </button>
-          <button onClick={onDelete}
-            className="text-xs text-red-400 hover:text-red-200 border border-red-800 hover:border-red-500 rounded-lg px-3 py-1.5 transition">
-            마감
-          </button>
+
+          {!isClosed ? (
+            <>
+              <button onClick={onEdit}
+                className="text-xs text-blue-400 hover:text-blue-200 border border-blue-800 hover:border-blue-500 rounded-lg px-3 py-1.5 transition">
+                수정
+              </button>
+              <button onClick={onCopy}
+                className="text-xs text-slate-400 hover:text-white border border-slate-600 hover:border-slate-400 rounded-lg px-3 py-1.5 transition">
+                복사
+              </button>
+              <button onClick={onLeaderboard}
+                className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-800 hover:border-emerald-500 rounded-lg px-3 py-1.5 transition">
+                지원자 보기
+              </button>
+              <button onClick={onClose}
+                className="text-xs text-red-400 hover:text-red-200 border border-red-800 hover:border-red-500 rounded-lg px-3 py-1.5 transition">
+                마감
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={onLeaderboard}
+                className="text-xs text-emerald-400 hover:text-emerald-200 border border-emerald-800 hover:border-emerald-500 rounded-lg px-3 py-1.5 transition">
+                지원자 보기
+              </button>
+              <button onClick={onReopen}
+                className="text-xs text-amber-400 hover:text-amber-200 border border-amber-800 hover:border-amber-500 rounded-lg px-3 py-1.5 transition">
+                다시 열기
+              </button>
+            </>
+          )}
         </div>
       </div>
 

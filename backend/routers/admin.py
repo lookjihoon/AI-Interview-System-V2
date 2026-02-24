@@ -82,10 +82,9 @@ def create_job(payload: JobPostingCreate, db: Session = Depends(get_db)):
 
 @router.get("/jobs", response_model=List[JobPostingResponse])
 def list_jobs(db: Session = Depends(get_db)):
-    """List all active Job Postings."""
+    """List ALL Job Postings (admin sees both ACTIVE and CLOSED)."""
     jobs = (
         db.query(JobPosting)
-        .filter(JobPosting.status == JobStatus.ACTIVE)
         .order_by(JobPosting.created_at.desc())
         .all()
     )
@@ -103,12 +102,24 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/jobs/{job_id}", status_code=204)
 def delete_job(job_id: int, db: Session = Depends(get_db)):
-    """Soft-delete (CLOSED) a Job Posting."""
+    """Soft-close a Job Posting."""
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job posting not found")
     job.status = JobStatus.CLOSED
     db.commit()
+
+
+@router.patch("/jobs/{job_id}/reopen", response_model=JobPostingResponse)
+def reopen_job(job_id: int, db: Session = Depends(get_db)):
+    """Re-open a previously CLOSED job posting."""
+    job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job posting not found")
+    job.status = JobStatus.ACTIVE
+    db.commit()
+    db.refresh(job)
+    return job
 
 
 @router.put("/jobs/{job_id}", response_model=JobPostingResponse)
