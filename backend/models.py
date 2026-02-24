@@ -58,16 +58,17 @@ class JobPosting(Base):
     __tablename__ = "job_postings"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    title = Column(String(500), nullable=False)
+    title = Column(String(200), nullable=False)
     description = Column(Text, nullable=False)  # Job Description (JD)
     requirements = Column(Text, nullable=True)  # Required skills and qualifications
-    min_experience = Column(Integer, nullable=False, default=0)  # Minimum years of experience
+    min_experience = Column(Integer, default=0)  # Minimum years of experience
     target_capabilities = Column(Text, nullable=True)  # Target capabilities for evaluation
     conditions = Column(Text, nullable=True)        # 근무조건 / 급여 / 근무시간
     procedures = Column(Text, nullable=True)        # 전형절차 / 면접방식
     application_method = Column(Text, nullable=True)  # 지원방법
-    status = Column(SQLEnum(JobStatus), nullable=False, default=JobStatus.ACTIVE, index=True)
+    status = Column(SQLEnum(JobStatus), default=JobStatus.DRAFT, index=True)
     posted_date = Column(Date, server_default=func.current_date(), nullable=False)
+    deadline = Column(DateTime, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

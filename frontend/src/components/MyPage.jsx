@@ -432,7 +432,7 @@ export default function MyPage() {
                       <tr key={row.session_id} className="hover:bg-slate-50 transition">
                         <td className="px-5 py-3 font-medium text-gray-900 max-w-[200px] truncate">{row.job_title}</td>
                         <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
-                          {new Date(row.date).toLocaleDateString('ko-KR', { year:'2-digit', month:'2-digit', day:'2-digit' })}
+                          {new Date(row.date).toLocaleString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' })}
                         </td>
                         <td className="px-4 py-3 text-center"><ScoreChip score={row.total_score} /></td>
                         <td className="px-4 py-3 text-center"><ScoreChip score={row.tech_score} /></td>

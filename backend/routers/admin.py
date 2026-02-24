@@ -25,6 +25,7 @@ class JobPostingCreate(BaseModel):
     conditions: Optional[str] = Field(None, description="근무조건 / 급여 / 근무시간")
     procedures: Optional[str] = Field(None, description="전형절차 / 면접방식")
     application_method: Optional[str] = Field(None, description="지원방법")
+    deadline: Optional[datetime] = Field(None, description="모집 마감일시")
 
     class Config:
         json_schema_extra = {
@@ -36,6 +37,7 @@ class JobPostingCreate(BaseModel):
                 "conditions": "재택근무 가능, 연봉 협의",
                 "procedures": "서류 → 코딩테스트 → 기술면접 → 최종면접",
                 "application_method": "이메일 제출 또는 채용 사이트 지원",
+                "deadline": "2026-12-31T23:59:59",
             }
         }
 
@@ -52,6 +54,7 @@ class JobPostingResponse(BaseModel):
     application_method: Optional[str]
     status: str
     posted_date: date
+    deadline: Optional[datetime]
     created_at: datetime
 
     class Config:
@@ -73,6 +76,7 @@ def create_job(payload: JobPostingCreate, db: Session = Depends(get_db)):
         procedures=payload.procedures,
         application_method=payload.application_method,
         status=JobStatus.ACTIVE,
+        deadline=payload.deadline,
     )
     db.add(job)
     db.commit()

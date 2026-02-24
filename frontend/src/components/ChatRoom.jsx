@@ -203,6 +203,7 @@ export default function ChatRoom() {
   const [isCompleted, setIsCompleted]       = useState(false);
   const [ttsEnabled, setTtsEnabled]         = useState(true);
   const [isPlaying, setIsPlaying]           = useState(false); // TTS currently playing
+  const [isStarted, setIsStarted]           = useState(false); // Forces initial user interaction
   const [cameraActive, setCameraActive]     = useState(false);
   const [cameraStream, setCameraStream]     = useState(null);
   const [emotionStats, setEmotionStats]     = useState({}); // { emotion: count } tally
@@ -240,8 +241,13 @@ export default function ChatRoom() {
     setIsPlaying(true);
     audio.onended = () => setIsPlaying(false);
     audio.onerror = () => setIsPlaying(false);
-    audio.play().catch(err => { console.warn('[TTS] play failed:', err); setIsPlaying(false); });
-  }, [ttsEnabled]);
+    if (isStarted) {
+      audio.play().catch(err => {
+        console.warn('[TTS] play failed:', err);
+        setIsPlaying(false);
+      });
+    }
+  }, [ttsEnabled, isStarted]);
 
   /* ── Frame capture function (standalone, no React state deps) ─── */
   const captureAndSendFrame = useCallback(async () => {
@@ -379,22 +385,39 @@ export default function ChatRoom() {
     init();
   }, [sessionId, getFirstQuestion]);
 
-  /* ── Initial-message TTS: play greeting audio when messages first populate ── */
+  /* ── Initial-message TTS: load greeting audio without auto-playing ── */
   const initialAudioFiredRef = useRef(false);
   useEffect(() => {
     // Only fire once, and only when messages are freshly loaded (not on every render)
     if (initialAudioFiredRef.current || messages.length === 0) return;
     // Check if this looks like a session that was resumed (already has user replies)
     const hasUserMsg = messages.some(m => m.sender === 'human');
-    if (hasUserMsg) { initialAudioFiredRef.current = true; return; }
+    if (hasUserMsg) { 
+      initialAudioFiredRef.current = true; 
+      setIsStarted(true); // Auto-start if it's a resumed session
+      return; 
+    }
     // Find the first AI message that has an audio_url via sessionStorage key set by InterviewSetup
     const greetingAudio = sessionStorage.getItem(`greeting_audio_${sessionId}`);
     if (greetingAudio) {
       initialAudioFiredRef.current = true;
       sessionStorage.removeItem(`greeting_audio_${sessionId}`);
-      playAudio(greetingAudio);
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+      }
+      audioRef.current.src = `${API_BASE_URL}${greetingAudio}`;
+      audioRef.current.onended = () => setIsPlaying(false);
+      audioRef.current.onerror = () => setIsPlaying(false);
+    } else if (messages.length === 1 && messages[0].sender === 'ai' && messages[0].audio_url) {
+      initialAudioFiredRef.current = true;
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+      }
+      audioRef.current.src = `${API_BASE_URL}${messages[0].audio_url}`;
+      audioRef.current.onended = () => setIsPlaying(false);
+      audioRef.current.onerror = () => setIsPlaying(false);
     }
-  }, [messages, sessionId, playAudio]);
+  }, [messages, sessionId]);
 
 
 
@@ -485,7 +508,36 @@ export default function ChatRoom() {
 
   /* ── Main render: split-screen ──────────────────────────────── */
   return (
-    <div className="h-screen bg-slate-900 flex flex-col md:flex-row overflow-hidden">
+    <div className="flex h-screen bg-slate-900 md:flex-row flex-col overflow-hidden relative">
+
+      {/* Full screen interaction overlay */}
+      {!isStarted && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-900/90 backdrop-blur-sm">
+          <button 
+            onClick={() => {
+              setIsStarted(true);
+              const firstTx = messages.find(t => t.sender === 'ai');
+              const audioUrl = firstTx?.audio_url || firstTx?.content?.audio_url;
+              
+              if (audioUrl) {
+                const cleanUrl = audioUrl.startsWith('/') ? audioUrl : `/${audioUrl}`;
+                // API_BASE_URL is used to be consistent, instead of hardcoding localhost
+                const audio = new Audio(`${API_BASE_URL}${cleanUrl}`);
+                setIsPlaying(true);
+                audio.onended = () => setIsPlaying(false);
+                audio.onerror = () => setIsPlaying(false);
+                audio.play().catch(e => {
+                  console.error("Audio play failed:", e);
+                  setIsPlaying(false);
+                });
+              }
+            }}
+            className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xl rounded-full shadow-lg animate-pulse"
+          >
+            ▶️ 면접 시작하기
+          </button>
+        </div>
+      )}
 
       {/* Hidden canvas for vision capture */}
       <canvas ref={canvasRef} className="hidden" />
@@ -497,7 +549,9 @@ export default function ChatRoom() {
         <div className="w-full text-center mb-4">
           <p className="text-slate-400 text-xs font-medium uppercase tracking-widest">AI 면접관</p>
           <h2 className="text-white font-bold text-sm mt-1">{sessionData?.jobTitle ?? '면접 세션'}</h2>
-          <p className="text-slate-500 text-xs">지원자: {sessionData?.userName ?? '-'}</p>
+          <p className="text-slate-500 text-xs mt-1 bg-slate-800/50 inline-block px-3 py-1 rounded-full border border-slate-700/50">
+            지원자: {(function() { try { return JSON.parse(localStorage.getItem('auth_user'))?.name; } catch { return null; } })() || sessionData?.userName || '익명'}
+          </p>
           {/* Global timer badge */}
           <div className="inline-flex items-center gap-1.5 mt-2 px-3 py-1 bg-slate-700/60 rounded-full">
             <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />

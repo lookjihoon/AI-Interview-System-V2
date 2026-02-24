@@ -58,7 +58,7 @@ const STATUS_FILTERS = [
 ];
 
 /* ── Empty form ──────────────────────────────────────────────────────────── */
-const EMPTY = { title:'', description:'', requirements:'', min_experience:0, conditions:'', procedures:'', application_method:'' };
+const EMPTY = { title:'', description:'', requirements:'', min_experience:0, conditions:'', procedures:'', application_method:'', deadline:'' };
 
 /* ════════════════════════════════════════════════════════════════════════════
    AdminDashboard
@@ -119,6 +119,7 @@ export default function AdminDashboard() {
       requirements: job.requirements || '', min_experience: job.min_experience,
       conditions: job.conditions || '', procedures: job.procedures || '',
       application_method: job.application_method || '',
+      deadline: job.deadline ? new Date(job.deadline).toISOString().slice(0, 16) : '',
     });
   };
 
@@ -133,7 +134,11 @@ export default function AdminDashboard() {
     }
     setSubmitting(true);
     try {
-      const payload = { ...form, min_experience: parseInt(form.min_experience, 10) || 0 };
+      const payload = { 
+        ...form, 
+        min_experience: parseInt(form.min_experience, 10) || 0,
+        deadline: form.deadline ? new Date(form.deadline).toISOString() : null,
+      };
       if (editId) {
         await axios.put(`${API_BASE_URL}/api/admin/jobs/${editId}`, payload);
         showToast('공고가 수정되었습니다.');
@@ -251,6 +256,9 @@ export default function AdminDashboard() {
                   <FLabel label="최소 경력 (년)">
                     <input className={inputCls} type="number" min="0" value={form.min_experience} onChange={set('min_experience')} />
                   </FLabel>
+                  <FLabel label="마감일시">
+                    <input className={inputCls} type="datetime-local" value={form.deadline} onChange={set('deadline')} />
+                  </FLabel>
                   <FLabel label="직무 설명 (JD)" hint="(필수)">
                     <textarea className={textareaCls} rows={4} value={form.description} onChange={set('description')} placeholder="담당 업무, 기술 스택, 팀 소개..." required />
                   </FLabel>
@@ -345,23 +353,25 @@ export default function AdminDashboard() {
             {/* Job selector */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
               <p className="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-3">공고 선택</p>
-              <div className="flex flex-wrap gap-2">
-                {jobs.map(j => (
-                  <button
-                    key={j.id}
-                    onClick={() => loadApplicants(j)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium border transition
-                      ${selectedJob?.id === j.id
-                        ? 'bg-indigo-600 border-indigo-500 text-white'
-                        : j.status === 'closed'
-                          ? 'bg-slate-800/50 border-slate-700 text-slate-500 hover:border-slate-500'
-                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-indigo-500 hover:text-white'
-                      }`}
-                  >
-                    JD #{j.id} · {j.title}
-                    {j.status === 'closed' && <span className="ml-2 text-xs text-red-400">[마감]</span>}
-                  </button>
-                ))}
+              <div className="flex flex-col gap-2">
+                <select
+                  className="w-full p-3 bg-slate-800 text-white rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
+                  onChange={(e) => {
+                    const j = jobs.find(x => x.id === parseInt(e.target.value));
+                    if (j) loadApplicants(j);
+                    else setSelectedJob(null);
+                  }}
+                  value={selectedJob?.id || ''}
+                >
+                  <option value="">-- 공고를 선택하세요 --</option>
+                  {jobs.map(job => (
+                    <option key={job.id} value={job.id}>
+                      {job.status === 'CLOSED' ? '[마감] ' : ''}
+                      {job.title}
+                      {job.deadline ? ` (마감: ${new Date(job.deadline).toLocaleDateString()})` : ''}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -428,7 +438,7 @@ export default function AdminDashboard() {
                               <p className="text-slate-500 text-xs">{row.candidate_email}</p>
                             </td>
                             <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
-                              {new Date(row.interview_date).toLocaleDateString('ko-KR')}
+                              {new Date(row.interview_date).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
                             </td>
                             <td className="px-4 py-3 text-center"><ScoreCell score={row.total_score} /></td>
                             <td className="px-4 py-3 text-center"><ScoreCell score={row.tech_score} /></td>
