@@ -259,7 +259,10 @@ export default function InterviewSetup() {
 
         <div className="mt-6 flex justify-between items-center">
           <p className="text-xs text-gray-400">Powered by FastAPI · React · pgvector</p>
-          <a href="/admin" className="text-xs text-blue-500 hover:text-blue-700 underline">관리자 →</a>
+          <div className="flex gap-3">
+            <a href="/mypage" className="text-xs text-indigo-500 hover:text-indigo-700 font-medium">마이페이지 →</a>
+            <a href="/admin"  className="text-xs text-blue-500  hover:text-blue-700 font-medium">관리자 →</a>
+          </div>
         </div>
       </div>
     </div>

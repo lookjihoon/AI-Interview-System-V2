@@ -178,3 +178,47 @@ async def get_user_resume(
         "resume_text": user.resume_text,
         "uploaded_at": user.created_at
     }
+
+
+@router.get("/users/{user_id}/interviews")
+async def get_user_interviews(
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all completed interview sessions for a user, with evaluation scores.
+    Used by MyPage interview history section.
+    """
+    from models import InterviewSession, SessionStatus, EvaluationReport, JobPosting
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    sessions = (
+        db.query(InterviewSession)
+        .filter(
+            InterviewSession.user_id == user_id,
+            InterviewSession.status == SessionStatus.COMPLETED
+        )
+        .order_by(InterviewSession.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for s in sessions:
+        job = db.query(JobPosting).filter(JobPosting.id == s.job_posting_id).first()
+        report = db.query(EvaluationReport).filter(EvaluationReport.session_id == s.id).first()
+        result.append({
+            "session_id": s.id,
+            "job_title": job.title if job else "(공고 삭제됨)",
+            "job_id": s.job_posting_id,
+            "date": s.created_at.isoformat(),
+            "total_score": report.total_score if report else None,
+            "tech_score": report.tech_score if report else None,
+            "communication_score": report.communication_score if report else None,
+            "non_verbal_score": report.non_verbal_score if report else None,
+            "status": s.status.value,
+        })
+    return result
+

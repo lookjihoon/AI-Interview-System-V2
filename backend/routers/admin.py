@@ -109,3 +109,84 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job posting not found")
     job.status = JobStatus.CLOSED
     db.commit()
+
+
+@router.put("/jobs/{job_id}", response_model=JobPostingResponse)
+def update_job(job_id: int, payload: JobPostingCreate, db: Session = Depends(get_db)):
+    """Edit an existing job posting."""
+    job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job posting not found")
+    for field, value in payload.model_dump(exclude_none=True).items():
+        setattr(job, field, value)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+@router.post("/jobs/{job_id}/copy", response_model=JobPostingResponse, status_code=201)
+def copy_job(job_id: int, db: Session = Depends(get_db)):
+    """Duplicate an existing job posting (creates a new DRAFT copy)."""
+    original = db.query(JobPosting).filter(JobPosting.id == job_id).first()
+    if not original:
+        raise HTTPException(status_code=404, detail="Job posting not found")
+    copy = JobPosting(
+        title=f"[사본] {original.title}",
+        description=original.description,
+        requirements=original.requirements,
+        min_experience=original.min_experience,
+        target_capabilities=original.target_capabilities,
+        conditions=original.conditions,
+        procedures=original.procedures,
+        application_method=original.application_method,
+        status=JobStatus.ACTIVE,
+    )
+    db.add(copy)
+    db.commit()
+    db.refresh(copy)
+    return copy
+
+
+@router.get("/jobs/{job_id}/applicants")
+def get_job_applicants(job_id: int, db: Session = Depends(get_db)):
+    """
+    Return leaderboard of all candidates who completed an AI interview
+    for this specific job posting, sorted by total_score descending.
+    """
+    from models import InterviewSession, SessionStatus, EvaluationReport, User as UserModel
+
+    job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job posting not found")
+
+    sessions = (
+        db.query(InterviewSession)
+        .filter(
+            InterviewSession.job_posting_id == job_id,
+            InterviewSession.status == SessionStatus.COMPLETED,
+        )
+        .order_by(InterviewSession.created_at.desc())
+        .all()
+    )
+
+    results = []
+    for s in sessions:
+        user = db.query(UserModel).filter(UserModel.id == s.user_id).first()
+        report = db.query(EvaluationReport).filter(EvaluationReport.session_id == s.id).first()
+        results.append({
+            "session_id": s.id,
+            "user_id": s.user_id,
+            "candidate_name": user.name if user else "Unknown",
+            "candidate_email": user.email if user else "",
+            "interview_date": s.created_at.isoformat(),
+            "total_score": report.total_score if report else None,
+            "tech_score": report.tech_score if report else None,
+            "communication_score": report.communication_score if report else None,
+            "non_verbal_score": report.non_verbal_score if report else None,
+            "has_report": report is not None,
+        })
+
+    # Sort by total_score descending (None scores go to bottom)
+    results.sort(key=lambda x: (x["total_score"] is None, -(x["total_score"] or 0)))
+    return results
+
