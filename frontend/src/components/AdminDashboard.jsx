@@ -245,7 +245,7 @@ export default function AdminDashboard() {
 
             {/* Create / Edit Form */}
             <div className="lg:col-span-2">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sticky top-8 h-fit">
                 <h2 className="text-base font-semibold mb-5 text-slate-200">
                   {editId ? `✏️ 공고 수정 (JD #${editId})` : '새 채용 공고 등록'}
                 </h2>
@@ -445,6 +445,17 @@ export default function AdminDashboard() {
                             <td className="px-4 py-3 text-center"><ScoreCell score={row.communication_score} /></td>
                             <td className="px-4 py-3 text-center"><ScoreCell score={row.non_verbal_score} /></td>
                             <td className="px-4 py-3 text-center">
+                              {(row.resume_path || row.resume_text) && (
+                                <button
+                                  onClick={() => {
+                                    if (row.resume_path) window.open(`${API_BASE_URL}/${row.resume_path.replace(/^\//, '')}`);
+                                    else alert(`[이력서 전문]\n\n${row.resume_text}`);
+                                  }}
+                                  className="text-xs text-sky-400 hover:text-sky-200 border border-sky-800 hover:border-sky-500 rounded-lg px-3 py-1 transition mr-2"
+                                >
+                                  이력서 보기
+                                </button>
+                              )}
                               {row.has_report ? (
                                 <button
                                   onClick={() => navigate(`/report/${row.session_id}`)}

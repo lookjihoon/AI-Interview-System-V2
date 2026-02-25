@@ -193,6 +193,8 @@ def get_job_applicants(job_id: int, db: Session = Depends(get_db)):
             "user_id": s.user_id,
             "candidate_name": user.name if user else "Unknown",
             "candidate_email": user.email if user else "",
+            "resume_path": user.resume_path if user else None,
+            "resume_text": user.resume_text if user else None,
             "interview_date": s.created_at.isoformat(),
             "total_score": report.total_score if report else None,
             "tech_score": report.tech_score if report else None,

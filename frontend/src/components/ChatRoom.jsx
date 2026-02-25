@@ -249,6 +249,31 @@ export default function ChatRoom() {
     }
   }, [ttsEnabled, isStarted]);
 
+  /* ── Issue 2: Handle TTS race condition ── */
+  useEffect(() => {
+    if (!isStarted) return;
+    
+    // Play the first AI message if it just arrived and is the first message
+    if (messages?.length === 1 && messages[0].sender === 'ai') {
+      const firstTx = messages[0];
+      
+      // Fallback to deterministic static path if audio_url is missing
+      const audioUrl = firstTx.audio_url || firstTx.content?.audio_url || `/uploads/audio/session_${sessionId}_turn_0.mp3`;
+      
+      if (audioUrl) {
+        const cleanUrl = audioUrl.startsWith('/') ? audioUrl : `/${audioUrl}`;
+        const audio = new Audio(`${API_BASE_URL}${cleanUrl}`);
+        setIsPlaying(true);
+        audio.onended = () => setIsPlaying(false);
+        audio.onerror = () => setIsPlaying(false);
+        audio.play().catch(e => {
+          console.error("Audio play failed on start:", e);
+          setIsPlaying(false);
+        });
+      }
+    }
+  }, [messages, isStarted, sessionId]);
+
   /* ── Frame capture function (standalone, no React state deps) ─── */
   const captureAndSendFrame = useCallback(async () => {
     const videoEl = document.getElementById('user-webcam-video');
@@ -514,24 +539,7 @@ export default function ChatRoom() {
       {!isStarted && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-900/90 backdrop-blur-sm">
           <button 
-            onClick={() => {
-              setIsStarted(true);
-              const firstTx = messages.find(t => t.sender === 'ai');
-              const audioUrl = firstTx?.audio_url || firstTx?.content?.audio_url;
-              
-              if (audioUrl) {
-                const cleanUrl = audioUrl.startsWith('/') ? audioUrl : `/${audioUrl}`;
-                // API_BASE_URL is used to be consistent, instead of hardcoding localhost
-                const audio = new Audio(`${API_BASE_URL}${cleanUrl}`);
-                setIsPlaying(true);
-                audio.onended = () => setIsPlaying(false);
-                audio.onerror = () => setIsPlaying(false);
-                audio.play().catch(e => {
-                  console.error("Audio play failed:", e);
-                  setIsPlaying(false);
-                });
-              }
-            }}
+            onClick={() => setIsStarted(true)}
             className="px-8 py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xl rounded-full shadow-lg animate-pulse"
           >
             ▶️ 면접 시작하기

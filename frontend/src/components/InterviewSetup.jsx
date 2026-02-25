@@ -31,6 +31,8 @@ export default function InterviewSetup() {
   const [loading, setLoading]         = useState(false);
   const [loadingMsg, setLoadingMsg]   = useState('');
   const [toast, setToast]             = useState('');
+  const [setupMode, setSetupMode]     = useState(false);
+  const [setupStream, setSetupStream] = useState(null);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -59,11 +61,38 @@ export default function InterviewSetup() {
     setResumeFile(file);
   };
 
-  /* 면접 시작 */
+  /* 면접 시작 전 기기 점검 모달 표시 */
   const handleStart = async (e) => {
     e.preventDefault();
     setToast('');
     if (!jobId) { showToast('지원할 공고를 선택해 주세요.'); return; }
+
+    setSetupMode(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setSetupStream(stream);
+    } catch (err) {
+      console.error(err);
+      showToast('카메라 및 마이크 권한을 허용해주세요.');
+      setSetupMode(false);
+    }
+  };
+
+  const handleCloseSetup = () => {
+    if (setupStream) {
+      setupStream.getTracks().forEach(t => t.stop());
+      setSetupStream(null);
+    }
+    setSetupMode(false);
+  };
+
+  /* 실제 면접 시작 (API 호출) */
+  const submitInterviewStart = async () => {
+    if (setupStream) {
+      setupStream.getTracks().forEach(t => t.stop());
+      setSetupStream(null);
+    }
+    setSetupMode(false);
     setLoading(true);
 
     try {
@@ -265,6 +294,54 @@ export default function InterviewSetup() {
           </div>
         </div>
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════
+          MODAL: DEVICE SETUP (GREEN ROOM)
+      ══════════════════════════════════════════════════════════════ */}
+      {setupMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 transition-opacity duration-200 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-lg w-full shadow-2xl relative text-center">
+            <h2 className="text-2xl font-bold text-white mb-2">면접 환경 점검</h2>
+            <p className="text-slate-400 text-sm mb-6">카메라와 마이크가 정상적으로 작동하는지 확인해주세요.</p>
+            
+            <div className="w-full aspect-video bg-black rounded-xl overflow-hidden mb-6 border border-slate-700 shadow-inner relative">
+              {!setupStream && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              <video 
+                autoPlay 
+                muted 
+                playsInline 
+                className="w-full h-full object-cover transform scale-x-[-1]"
+                ref={(node) => {
+                  if (node && setupStream) {
+                    node.srcObject = setupStream;
+                  }
+                }}
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button 
+                onClick={handleCloseSetup}
+                className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium transition"
+              >
+                취소 (돌아가기)
+              </button>
+              <button 
+                onClick={submitInterviewStart}
+                disabled={!setupStream}
+                className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition shadow-lg shadow-indigo-600/20 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                ✅ 확인 완료 및 면접 입장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

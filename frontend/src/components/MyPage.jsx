@@ -72,6 +72,9 @@ export default function MyPage() {
   const [jobs, setJobs]             = useState([]);
   const [jobSearch, setJobSearch]   = useState('');
   const [startingJob, setStartingJob] = useState(null);  // job.id being started
+  const [selectedJob, setSelectedJob] = useState(null);  // For job details modal
+  const [setupJob, setSetupJob]       = useState(null);  // For pre-interview device check modal
+  const [setupStream, setSetupStream] = useState(null);
 
   /* ─── History state ───────────────────────────────────────────────────── */
   const [history, setHistory]       = useState([]);
@@ -84,7 +87,10 @@ export default function MyPage() {
 
   /* ─── Redirect to /login if not authenticated ─────────────────────────── */
   useEffect(() => {
-    if (!userId) navigate('/login', { replace: true });
+    // If not userId, we redirect. We keep this hook execution absolute.
+    if (!userId) {
+      if (typeof window !== 'undefined') navigate('/login', { replace: true });
+    }
   }, [userId, navigate]);
 
   /* ─── Load jobs & history on tab change ──────────────────────────────── */
@@ -161,8 +167,36 @@ export default function MyPage() {
     }
   };
 
+  /* ─── Pre-interview Device Check (Green Room) ────────── */
+  const handleOpenSetup = async (job) => {
+    setSetupJob(job);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setSetupStream(stream);
+    } catch (err) {
+      console.error(err);
+      showToast('카메라 및 마이크 접근 권한을 허용해주세요.', 'error');
+    }
+  };
+
+  const handleCloseSetup = () => {
+    if (setupStream) {
+      setupStream.getTracks().forEach(t => t.stop());
+      setSetupStream(null);
+    }
+    setSetupJob(null);
+  };
+
   /* Issue 3: use /api/interview/start with multipart FormData */
-  const handleStartInterview = async (job) => {
+  const handleStartInterview = async (jobToStart) => {
+    const job = jobToStart || setupJob;
+    if (!job) return;
+
+    if (setupStream) {
+      setupStream.getTracks().forEach(t => t.stop());
+      setSetupStream(null);
+    }
+
     setStartingJob(job.id);
     try {
       const fd = new FormData();
@@ -181,9 +215,9 @@ export default function MyPage() {
   };
 
   /* ─── Derived ─────────────────────────────────────────────────────────── */
-  const filteredJobs = jobs.filter(j =>
-    j.title.toLowerCase().includes(jobSearch.toLowerCase()) ||
-    (j.requirements || '').toLowerCase().includes(jobSearch.toLowerCase())
+  const filteredJobs = (jobs || []).filter(j =>
+    (j?.title || '').toLowerCase().includes((jobSearch || '').toLowerCase()) ||
+    (j?.requirements || '').toLowerCase().includes((jobSearch || '').toLowerCase())
   );
 
   const sortedHistory = [...history].sort((a, b) =>
@@ -353,39 +387,50 @@ export default function MyPage() {
               />
             </div>
 
-            {filteredJobs.length === 0 ? (
+            {filteredJobs?.length === 0 ? (
               <div className="bg-white rounded-2xl p-12 text-center text-gray-400 shadow-sm">
                 <p className="text-4xl mb-3">📭</p>
                 <p className="text-sm">표시할 채용 공고가 없습니다.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredJobs.map(job => (
+                {filteredJobs?.map(job => (
                   <div key={job.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 hover:shadow-md hover:border-indigo-200 transition-all flex flex-col">
                     <div className="flex-1">
                       <p className="text-xs text-indigo-500 font-mono mb-1">JD #{job.id}</p>
                       <h3 className="font-bold text-gray-900 text-base leading-snug mb-2">{job.title}</h3>
                       {job.min_experience > 0 && (
-                        <span className="inline-block text-xs bg-slate-100 text-slate-600 rounded px-2 py-0.5 mb-2">
+                        <span className="inline-block text-xs bg-slate-100 text-slate-600 rounded px-2 py-0.5 mb-2 mr-2">
                           경력 {job.min_experience}년 이상
                         </span>
                       )}
+                      <span className="inline-block text-xs bg-indigo-50 text-indigo-600 rounded px-2 py-0.5 mb-2 font-medium border border-indigo-100">
+                        마감일: {job.deadline ? new Date(job.deadline).toLocaleDateString() : '상시채용'}
+                      </span>
                       {job.requirements && (
                         <p className="text-xs text-gray-500 leading-relaxed line-clamp-3">{job.requirements}</p>
                       )}
                     </div>
-                    <button
-                      onClick={() => handleStartInterview(job)}
-                      disabled={startingJob === job.id}
-                      className="mt-4 w-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-semibold py-2.5 rounded-xl transition-all shadow-sm disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {startingJob === job.id ? (
-                        <>
-                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                          면접 준비 중...
-                        </>
-                      ) : '지원 및 면접 시작하기 →'}
-                    </button>
+                    <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                      <button
+                        onClick={() => setSelectedJob(job)}
+                        className="flex-1 bg-white border border-gray-300 hover:bg-gray-50 active:scale-95 text-gray-700 text-sm font-semibold py-2.5 rounded-xl transition-all shadow-sm"
+                      >
+                        상세보기
+                      </button>
+                      <button
+                        onClick={() => handleOpenSetup(job)}
+                        disabled={startingJob === job.id}
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-sm font-semibold py-2.5 rounded-xl transition-all shadow-sm disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {startingJob === job.id ? (
+                          <>
+                            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            준비 중...
+                          </>
+                        ) : '지원/면접 시작'}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -456,6 +501,128 @@ export default function MyPage() {
         )}
 
       </main>
+
+      {/* ══════════════════════════════════════════════════════════════
+          MODAL: JOB DETAILS
+      ══════════════════════════════════════════════════════════════ */}
+      {selectedJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 transition-opacity duration-200">
+          <div className="bg-white rounded-2xl p-8 max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+            <button 
+              onClick={() => setSelectedJob(null)}
+              className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 transition"
+            >
+              ✕
+            </button>
+            <div className="mb-6">
+              <span className="inline-block text-xs font-mono text-indigo-500 bg-indigo-50 px-2 py-1 rounded mb-2">JD #{selectedJob.id}</span>
+              <h2 className="text-2xl font-bold text-gray-900 leading-tight block pr-8">{selectedJob.title}</h2>
+              <div className="mt-3 flex flex-wrap gap-2 text-sm">
+                <span className="px-2.5 py-1 bg-slate-100 text-slate-700 font-medium rounded-md">
+                  경력 {selectedJob.min_experience > 0 ? `${selectedJob.min_experience}년 이상` : '무관'}
+                </span>
+                <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 font-medium rounded-md border border-indigo-100">
+                  마감일: {selectedJob.deadline ? new Date(selectedJob.deadline).toLocaleDateString() : '상시채용'}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {selectedJob.description && (
+                <div>
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2 pb-1 border-b border-gray-100"><span>📝</span> 직무 설명</h3>
+                  <p className="whitespace-pre-wrap text-gray-600 text-sm leading-relaxed">{selectedJob.description}</p>
+                </div>
+              )}
+              {selectedJob.requirements && (
+                <div>
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2 pb-1 border-b border-gray-100"><span>✅</span> 자격 요건</h3>
+                  <p className="whitespace-pre-wrap text-gray-600 text-sm leading-relaxed">{selectedJob.requirements}</p>
+                </div>
+              )}
+              {selectedJob.conditions && (
+                <div>
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2 pb-1 border-b border-gray-100"><span>🏢</span> 근무 조건</h3>
+                  <p className="whitespace-pre-wrap text-gray-600 text-sm leading-relaxed">{selectedJob.conditions}</p>
+                </div>
+              )}
+              {selectedJob.procedures && (
+                <div>
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2 pb-1 border-b border-gray-100"><span>🔄</span> 전형 절차</h3>
+                  <p className="whitespace-pre-wrap text-gray-600 text-sm leading-relaxed">{selectedJob.procedures}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end mt-8 pt-4 border-t border-gray-100 gap-3">
+              <button onClick={() => setSelectedJob(null)} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-medium transition">
+                닫기
+              </button>
+              <button 
+                onClick={() => {
+                  handleOpenSetup(selectedJob);
+                  setSelectedJob(null);
+                }}
+                disabled={startingJob === selectedJob.id}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium shadow-md shadow-indigo-200 transition"
+              >
+                지원을 위해 면접방 입장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════
+          MODAL: DEVICE SETUP (GREEN ROOM)
+      ══════════════════════════════════════════════════════════════ */}
+      {setupJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 transition-opacity duration-200 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 max-w-lg w-full shadow-2xl relative text-center">
+            <h2 className="text-2xl font-bold text-white mb-2">면접 환경 점검</h2>
+            <p className="text-slate-400 text-sm mb-6">카메라와 마이크가 정상적으로 작동하는지 확인해주세요.</p>
+            
+            <div className="w-full aspect-video bg-black rounded-xl overflow-hidden mb-6 border border-slate-700 shadow-inner relative">
+              {!setupStream && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              <video 
+                autoPlay 
+                muted 
+                playsInline 
+                className="w-full h-full object-cover transform scale-x-[-1]"
+                ref={(node) => {
+                  if (node && setupStream) {
+                    node.srcObject = setupStream;
+                  }
+                }}
+              />
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button 
+                onClick={handleCloseSetup}
+                className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium transition"
+              >
+                취소 (돌아가기)
+              </button>
+              <button 
+                onClick={() => {
+                  handleStartInterview(setupJob);
+                  setSetupJob(null);
+                }}
+                disabled={startingJob === setupJob.id || !setupStream}
+                className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium transition shadow-lg shadow-indigo-600/20 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {startingJob === setupJob.id ? '입장 중...' : '✅ 확인 완료 및 면접 입장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

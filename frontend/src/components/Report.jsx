@@ -149,6 +149,27 @@ export default function Report() {
     ? `${Math.floor(s / 60)}분 ${s % 60}초`
     : null;
 
+  /* ── Admin Analytics: Category Stats ── */
+  const user = (() => {
+    try { return JSON.parse(localStorage.getItem('auth_user') || localStorage.getItem('user') || 'null'); }
+    catch { return null; }
+  })();
+  const isAdmin = user?.role === 'ADMIN' || user?.role === 'admin';
+  const categoryStats = {};
+  if (isAdmin && transcript.length > 0) {
+    transcript.filter(msg => msg.sender === 'ai').forEach(msg => {
+      const matches = [...msg.content.matchAll(/\[#(.*?)\]/g)];
+      for (const match of matches) {
+        if (match && match[1]) {
+          const cat = match[1].trim();
+          categoryStats[cat] = (categoryStats[cat] || 0) + 1;
+        }
+      }
+    });
+  }
+  const categoryEntries = Object.entries(categoryStats).sort((a, b) => b[1] - a[1]);
+  const totalQuestions = Object.values(categoryStats).reduce((a, b) => a + b, 0);
+
   const radarData = report
     ? [
         { subject: '직무역량',   score: techScore },
@@ -238,9 +259,39 @@ export default function Report() {
 
         {/* Parse warning banner */}
         {parseError && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-700 text-sm">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-700 text-sm mb-8">
             ⚠️ AI 리포트 형식이 일부 예상과 다릅니다. 가능한 데이터를 표시합니다.
           </div>
+        )}
+
+        {/* Admin Analytics: Question Categories */}
+        {isAdmin && categoryEntries.length > 0 && (
+          <section className="bg-slate-900 border border-slate-800 text-slate-200 rounded-2xl shadow-xl shadow-indigo-900/10 p-6 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-bl-full pointer-events-none" />
+            <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-3">
+              <span className="text-xl">📊</span>
+              <h2 className="text-lg font-bold text-white tracking-wide">
+                [Admin] 출제된 질문 카테고리 분석
+              </h2>
+            </div>
+            
+            <div className="grid gap-4 sm:grid-cols-2">
+              {categoryEntries.map(([cat, count]) => {
+                const percent = totalQuestions > 0 ? (count / totalQuestions) * 100 : 0;
+                return (
+                  <div key={cat} className="bg-slate-800/60 rounded-xl p-4 border border-slate-700/50 hover:border-indigo-500/50 transition-colors">
+                    <div className="flex justify-between items-end mb-2">
+                      <span className="text-sm font-semibold text-slate-100">{cat}</span>
+                      <span className="text-sm font-mono text-indigo-400">{count}건 <span className="text-slate-500 text-xs ml-1">({Math.round(percent)}%)</span></span>
+                    </div>
+                    <div className="h-2.5 bg-slate-900 rounded-full overflow-hidden shadow-inner">
+                      <div className="h-full bg-gradient-to-r from-indigo-600 to-indigo-400 rounded-full transition-all duration-1000" style={{ width: `${percent}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         {/* Score Overview */}
