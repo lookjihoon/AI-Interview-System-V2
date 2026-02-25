@@ -106,8 +106,17 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (tab === 'statistics') {
       axios.get(`${API_BASE_URL}/api/admin/analytics/categories`)
-        .then(r => setStats(r.data))
-        .catch(() => showToast('통계 데이터를 불러오지 못했습니다.', 'error'));
+        .then(r => {
+          if (r.data.detail) {
+            console.error("Stats Error:", r.data.detail);
+          } else {
+            setStats(r.data);
+          }
+        })
+        .catch(e => {
+          console.error("Stats Fetch failed:", e);
+          showToast('통계 데이터를 불러오지 못했습니다.', 'error');
+        });
     }
   }, [tab]);
 

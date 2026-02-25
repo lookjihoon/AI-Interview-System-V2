@@ -212,17 +212,45 @@ def get_job_applicants(job_id: int, db: Session = Depends(get_db)):
 def get_category_stats(db: Session = Depends(get_db)):
     """
     Return global statistics for AI generated question categories.
+    Queries the QuestionBank table via JOIN for predefined questions,
+    and falls back to JSON parsing for dynamic RAG questions.
     """
-    import re
-    from models import Transcript
-
-    ai_msgs = db.query(Transcript).filter(Transcript.sender == "ai").all()
+    from sqlalchemy import func
+    from models import Transcript, QuestionBank
+    import json
+    
     stats = {}
-    for msg in ai_msgs:
-        # Match e.g., [#TECHNICAL] or just #TECHNICAL depending on how tags are stored
-        # Also handles variations spacing
-        matches = re.findall(r'#\s*([A-Z_]+)', msg.content)
-        for m in matches:
-            stats[m] = stats.get(m, 0) + 1
+    
+    # 1. Join QuestionBank for predefined categories
+    results = db.query(
+        QuestionBank.category, 
+        func.count(Transcript.id)
+    ).join(
+        QuestionBank, 
+        Transcript.question_id == QuestionBank.id
+    ).filter(
+        Transcript.sender == "ai"
+    ).group_by(QuestionBank.category).all()
+        
+    for cat, count in results:
+        if cat:
+            clean_cat = cat.replace('#', '').strip()
+            stats[clean_cat] = stats.get(clean_cat, 0) + count
+            
+    # 2. Fallback for JSON content (RAG dynamic tags)
+    msgs = db.query(Transcript).filter(
+        Transcript.sender == "ai"
+    ).all()
+    for msg in msgs:
+        if msg.content and "{" in msg.content:
+            try:
+                data = json.loads(msg.content)
+                c = data.get("category") or data.get("tags")
+                if c:
+                    cc = str(c).replace('#', '').strip()
+                    stats[cc] = stats.get(cc, 0) + 1
+            except:
+                pass
+                
     return stats
 
