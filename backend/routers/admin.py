@@ -207,3 +207,22 @@ def get_job_applicants(job_id: int, db: Session = Depends(get_db)):
     results.sort(key=lambda x: (x["total_score"] is None, -(x["total_score"] or 0)))
     return results
 
+
+@router.get("/analytics/categories")
+def get_category_stats(db: Session = Depends(get_db)):
+    """
+    Return global statistics for AI generated question categories.
+    """
+    import re
+    from models import Transcript
+
+    ai_msgs = db.query(Transcript).filter(Transcript.sender == "ai").all()
+    stats = {}
+    for msg in ai_msgs:
+        # Match e.g., [#TECHNICAL] or just #TECHNICAL depending on how tags are stored
+        # Also handles variations spacing
+        matches = re.findall(r'#\s*([A-Z_]+)', msg.content)
+        for m in matches:
+            stats[m] = stats.get(m, 0) + 1
+    return stats
+

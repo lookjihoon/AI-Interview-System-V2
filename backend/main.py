@@ -27,6 +27,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount uploads directory for static files like Audio
+os.makedirs("uploads/audio", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 @app.on_event("startup")
 async def startup_event():

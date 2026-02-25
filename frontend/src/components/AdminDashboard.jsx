@@ -77,12 +77,13 @@ export default function AdminDashboard() {
   const [editId, setEditId]       = useState(null);       // null = create mode, number = edit mode
   const [submitting, setSubmitting] = useState(false);
 
-  /* ─── Leaderboard tab ─────────────────────────────────────────────────── */
+  /* ─── Leaderboard / Statistics tab ────────────────────────────────────── */
   const [selectedJob, setSelectedJob]     = useState(null);
   const [applicants, setApplicants]       = useState([]);
   const [applicantSort, setApplicantSort] = useState('total_score');
   const [sortDesc, setSortDesc]           = useState(true);
   const [loadingApplicants, setLoadingApplicants] = useState(false);
+  const [stats, setStats]                 = useState({});
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -100,6 +101,15 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  /* ─── Fetch Stats on tab 'statistics' ────────────────────────────────── */
+  useEffect(() => {
+    if (tab === 'statistics') {
+      axios.get(`${API_BASE_URL}/api/admin/analytics/categories`)
+        .then(r => setStats(r.data))
+        .catch(() => showToast('통계 데이터를 불러오지 못했습니다.', 'error'));
+    }
+  }, [tab]);
 
   /* ─── Derived: filtered job list ─────────────────────────────────────── */
   const filteredJobs = jobs.filter(j => {
@@ -232,9 +242,10 @@ export default function AdminDashboard() {
         </div>
 
         {/* ── Tabs ──────────────────────────────────────────────────────── */}
-        <div className="flex gap-2 mb-8">
+        <div className="flex gap-2 mb-8 border-b border-slate-800 pb-2">
           <TabBtn label="공고 관리"     icon="📋" active={tab === 'jobs'}        onClick={() => setTab('jobs')} />
           <TabBtn label="지원자 랭킹"   icon="🏆" active={tab === 'leaderboard'} onClick={() => setTab('leaderboard')} />
+          <TabBtn label="면접 통계"     icon="📊" active={tab === 'statistics'}  onClick={() => setTab('statistics')} />
         </div>
 
         {/* ════════════════════════════════════════════════════════════════
@@ -482,6 +493,61 @@ export default function AdminDashboard() {
                 <p className="text-sm">위에서 공고를 선택하면 지원자 랭킹이 표시됩니다.</p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════
+            TAB 3: STATISTICS
+        ════════════════════════════════════════════════════════════════ */}
+        {tab === 'statistics' && (
+          <div className="grid lg:grid-cols-2 gap-8">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl shadow-indigo-900/10 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-bl-full pointer-events-none" />
+              
+              <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-3">
+                <span className="text-xl">📊</span>
+                <h3 className="text-xl font-bold text-white tracking-wide">
+                  전체 AI 질문 카테고리 분포
+                </h3>
+              </div>
+
+              {Object.keys(stats).length === 0 ? (
+                <div className="text-slate-500 flex flex-col items-center justify-center py-10">
+                  <p className="text-3xl mb-3">🕸️</p>
+                  <p>수집된 질문 카테고리가 없습니다.</p>
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {Object.entries(stats).sort((a,b) => b[1] - a[1]).map(([cat, count]) => {
+                    // Display scale logic: max out purely visually for the demo
+                    const maxVal = Math.max(...Object.values(stats), 10);
+                    const percent = (count / maxVal) * 100;
+                    
+                    return (
+                      <div key={cat} className="group cursor-default">
+                        <div className="flex justify-between items-end mb-1.5 transition-colors group-hover:text-indigo-300">
+                          <span className="text-sm font-semibold text-slate-100 uppercase">#{cat}</span>
+                          <span className="text-sm font-mono text-indigo-400 font-medium bg-slate-800 px-2 py-0.5 rounded shadow-inner">{count}회</span>
+                        </div>
+                        <div className="w-full bg-slate-800/80 rounded-full h-3.5 shadow-inner overflow-hidden border border-slate-700/50">
+                          <div
+                            className="bg-gradient-to-r from-indigo-600 to-indigo-400 h-full rounded-full transition-all duration-1000 group-hover:from-indigo-500 group-hover:to-blue-400"
+                            style={{ width: `${percent}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            
+            <div className="flex flex-col gap-4">
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl text-slate-400 flex flex-col items-center justify-center h-48 text-center">
+                <p className="text-3xl mb-2">💡</p>
+                <p className="text-sm">추가 통계 모듈(예: 합격률, 평균 점수 등)을<br/>여기에 확장할 수 있습니다.</p>
+              </div>
+            </div>
           </div>
         )}
 
