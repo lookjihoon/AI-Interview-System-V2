@@ -475,7 +475,11 @@ export default function MyPage() {
                   <tbody className="divide-y divide-gray-50">
                     {sortedHistory.map(row => (
                       <tr key={row.session_id} className="hover:bg-slate-50 transition">
-                        <td className="px-5 py-3 font-medium text-gray-900 max-w-[200px] truncate">{row.job_title}</td>
+                        <td className="px-5 py-3 font-medium text-gray-900">
+                          <div title={row.job_title} className="max-w-[150px] sm:max-w-[200px] truncate cursor-help">
+                            {row.job_title}
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
                           {new Date(row.date).toLocaleString('ko-KR', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' })}
                         </td>
