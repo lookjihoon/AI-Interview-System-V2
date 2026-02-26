@@ -143,6 +143,7 @@ class EvaluationReport(Base):
     non_verbal_score = Column(Integer, nullable=True)  # Non-verbal behavior (Vision analysis)
     summary = Column(Text, nullable=True)  # AI-generated summary
     details = Column(JSON, nullable=True)  # JSONB: Detailed rubric matching results
+    emotion_timeline = Column(JSON, nullable=True) # Temporal array of [{time: sec, emotion: str}]
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

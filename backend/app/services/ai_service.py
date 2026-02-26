@@ -653,7 +653,13 @@ def get_ai_service() -> InterviewAI:
     return _ai_service
 
 
-def generate_final_report(session_id: int, db: Session, vision_data: Optional[Dict[str, Any]] = None, total_time: int = 0) -> None:
+def generate_final_report(
+    session_id: int, 
+    db: Session, 
+    vision_data: Optional[Dict[str, Any]] = None, 
+    emotion_timeline: Optional[List[Dict[str, Any]]] = None,
+    total_time: int = 0
+) -> None:
     """
     Generate a comprehensive evaluation report for a completed interview session.
 
@@ -840,7 +846,8 @@ Now output the JSON:"""
             problem_solving_score=problem_solving_score,
             non_verbal_score=nv_score,
             summary=text_data.get("summary", ""),
-            details=details
+            details=details,
+            emotion_timeline=emotion_timeline
         )
         # ── ULTIMATE OVERRIDE: explicit property write before INSERT ──────────
         # Guards against any ORM default / constructor scoping issue

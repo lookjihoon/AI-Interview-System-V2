@@ -183,6 +183,7 @@ export default function ChatRoom() {
   const canvasRef        = useRef(null);
   const visionTimerRef   = useRef(null);
   const mediaStreamRef   = useRef(null);  // always holds the live MediaStream
+  const startTimeRef     = useRef(Date.now()); // Tracks when the session started
 
   // Ref-callback: fires the moment React attaches the <video> DOM node.
   // This avoids the race where cameraStream state updates before the element exists.
@@ -207,6 +208,7 @@ export default function ChatRoom() {
   const [cameraActive, setCameraActive]     = useState(false);
   const [cameraStream, setCameraStream]     = useState(null);
   const [emotionStats, setEmotionStats]     = useState({}); // { emotion: count } tally
+  const [emotionLogs, setEmotionLogs]       = useState([]); // { time: sec, emotion: str }
   const [visionAnalyzing, setVisionAnalyzing] = useState(false);
   const [faceError, setFaceError]           = useState(false); // no face detected
   const [totalSeconds, setTotalSeconds]     = useState(0);    // global interview timer
@@ -297,6 +299,10 @@ export default function ChatRoom() {
       } else if (data?.dominant_emotion) {
         setFaceError(false);
         setEmotionStats(prev => ({ ...prev, [data.dominant_emotion]: (prev[data.dominant_emotion] || 0) + 1 }));
+        
+        // Log emotion at current elapsed time
+        const currentSec = Math.floor((Date.now() - startTimeRef.current) / 1000);
+        setEmotionLogs(prev => [...prev, { time: currentSec, emotion: data.dominant_emotion }]);
       }
     } catch (err) {
       console.error('[VISION] POST error:', err?.response?.status, err?.message);
@@ -460,11 +466,16 @@ export default function ChatRoom() {
     const vision_data = total_samples > 0 ? { ...emotionStats } : null;
     const answer_time = Math.floor((Date.now() - turnStartTime) / 1000);
 
+    // Snapshot the current emotion logs for this request, and clear them to prevent massive payloads
+    const currentLogs = [...emotionLogs];
+    setEmotionLogs([]);
+
     try {
       const { data } = await axios.post(`${API_BASE_URL}/api/interview/chat`, {
         session_id:  parseInt(sessionId, 10),
         user_answer: answer,
         vision_data,
+        emotion_timeline: currentLogs,
         answer_time,
         total_time:  totalSeconds,   // always send; backend stores in details on final turn
       });

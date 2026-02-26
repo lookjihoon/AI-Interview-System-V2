@@ -96,6 +96,7 @@ class ChatRequest(BaseModel):
     session_id: int = Field(..., description="Interview session ID")
     user_answer: Optional[str] = Field(None, description="User's answer to previous question")
     vision_data: Optional[Dict[str, Any]] = Field(None, description="Emotion percentages from webcam analysis e.g. {neutral: 50, happy: 30}")
+    emotion_timeline: Optional[List[Dict[str, Any]]] = Field(None, description="Array of temporal emotions [{time: sec, emotion: 'str'}]")
     answer_time: Optional[int] = Field(0, description="Time taken to type/speak the answer in seconds")
     total_time: Optional[int] = Field(0, description="Total elapsed interview time in seconds")
 
@@ -291,6 +292,7 @@ async def chat(
                     session_id=session.id,
                     db=db,
                     vision_data=request.vision_data,
+                    emotion_timeline=request.emotion_timeline,
                     total_time=request.total_time or 0
                 )
             except Exception as report_err:
@@ -513,6 +515,7 @@ class ReportResponse(BaseModel):
     non_verbal_score: Optional[int] = None      # ← was MISSING — FastAPI was stripping this field!
     summary: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+    emotion_timeline: Optional[list] = None
     created_at: datetime
 
     class Config:
@@ -547,5 +550,6 @@ async def get_report(
         non_verbal_score=report.non_verbal_score,     # ← explicitly included now
         summary=report.summary,
         details=report.details,
+        emotion_timeline=report.emotion_timeline,
         created_at=report.created_at
     )

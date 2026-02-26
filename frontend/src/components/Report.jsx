@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis,
-  PolarRadiusAxis, ResponsiveContainer, Tooltip
+  PolarRadiusAxis, ResponsiveContainer, Tooltip,
+  LineChart, Line, XAxis, YAxis, CartesianGrid
 } from 'recharts';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -148,6 +149,21 @@ export default function Report() {
   const formatTotalTime    = (s) => s > 0
     ? `${Math.floor(s / 60)}분 ${s % 60}초`
     : null;
+
+  /* ── Emotion Timeline ── */
+  const chartData = (report?.emotion_timeline || []).map(log => {
+    const m = String(Math.floor(log.time / 60)).padStart(2, '0');
+    const s = String(log.time % 60).padStart(2, '0');
+    let score = 0;
+    if (['happy', 'surprise'].includes(log.emotion)) score = 1;
+    else if (['sad', 'fear', 'angry', 'disgust'].includes(log.emotion)) score = -1;
+    
+    return {
+      displayTime: `${m}:${s}`,
+      score: score,
+      emotionLabel: log.emotion
+    };
+  });
 
   /* ── Admin Analytics: Category Stats ── */
   const user = (() => {
@@ -353,6 +369,29 @@ export default function Report() {
             </div>
           )}
         </section>
+
+        {/* Emotion Timeline Chart */}
+        <div className="bg-white p-6 rounded-xl shadow mt-6">
+          <h3 className="text-xl font-bold mb-4">
+            ⏱️ 시간대별 감정 변화 타임라인
+          </h3>
+          {chartData.length > 0 ? (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <XAxis dataKey="displayTime" />
+                  <YAxis domain={[-1.5, 1.5]} ticks={[-1, 0, 1]} 
+                    tickFormatter={t => t===1 ? '긍정' : t===0 ? '중립' : '부정'} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="score" 
+                    stroke="#8b5cf6" strokeWidth={3} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-gray-500">감정 데이터가 수집되지 않았습니다.</p>
+          )}
+        </div>
 
         {/* Summary */}
         {summary && (
