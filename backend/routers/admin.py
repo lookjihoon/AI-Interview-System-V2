@@ -253,4 +253,42 @@ def get_category_stats(db: Session = Depends(get_db)):
                 pass
                 
     return stats
+    return stats
 
+
+@router.get("/analytics/overview")
+def get_analytics_overview(db: Session = Depends(get_db)):
+    """
+    Return high-level overview statistics including average scores
+    from Evaluation Reports and applicant counts per Job Posting.
+    """
+    from sqlalchemy import func
+    from models import EvaluationReport, InterviewSession, JobPosting
+    
+    # Calculate average scores across all EvaluationReports
+    avg = db.query(
+        func.avg(EvaluationReport.total_score).label("tot"),
+        func.avg(EvaluationReport.tech_score).label("hs"),  # In models.py it's tech_score
+        func.avg(EvaluationReport.communication_score).label("cm"),
+        func.avg(EvaluationReport.problem_solving_score).label("ps"),
+        func.avg(EvaluationReport.non_verbal_score).label("at") # in models.py it's non_verbal_score
+    ).first()
+    
+    # Calculate applicant counts per active job posting
+    jobs = db.query(
+        JobPosting.title, func.count(InterviewSession.id)
+    ).outerjoin(
+        InterviewSession, 
+        JobPosting.id == InterviewSession.job_posting_id
+    ).group_by(JobPosting.id).all()
+    
+    return {
+        "scores": {
+            "종합 평균": round(float(avg.tot or 0), 1),
+            "직무 역량": round(float(avg.hs or 0), 1),
+            "의사소통": round(float(avg.cm or 0), 1),
+            "문제해결": round(float(avg.ps or 0), 1),
+            "면접 태도": round(float(avg.at or 0), 1)
+        },
+        "jobs": [{"title": j[0], "count": j[1]} for j in jobs]
+    }

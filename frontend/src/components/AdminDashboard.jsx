@@ -84,6 +84,7 @@ export default function AdminDashboard() {
   const [sortDesc, setSortDesc]           = useState(true);
   const [loadingApplicants, setLoadingApplicants] = useState(false);
   const [stats, setStats]                 = useState({});
+  const [overview, setOverview]           = useState(null);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
@@ -117,6 +118,11 @@ export default function AdminDashboard() {
           console.error("Stats Fetch failed:", e);
           showToast('통계 데이터를 불러오지 못했습니다.', 'error');
         });
+
+      // Fetch overview
+      axios.get(`${API_BASE_URL}/api/admin/analytics/overview`)
+        .then(r => setOverview(r.data))
+        .catch(e => console.error(e));
     }
   }, [tab]);
 
@@ -551,10 +557,66 @@ export default function AdminDashboard() {
               )}
             </div>
             
-            <div className="flex flex-col gap-4">
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl text-slate-400 flex flex-col items-center justify-center h-48 text-center">
-                <p className="text-3xl mb-2">💡</p>
-                <p className="text-sm">추가 통계 모듈(예: 합격률, 평균 점수 등)을<br/>여기에 확장할 수 있습니다.</p>
+            <div className="flex flex-col gap-6">
+              {/* Card 2: Average Scores */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl shadow-indigo-900/10">
+                <div className="flex items-center gap-2 mb-6 border-b border-slate-800 pb-3">
+                  <span className="text-xl">🎯</span>
+                  <h3 className="text-xl font-bold text-white tracking-wide">지원자 평균 역량</h3>
+                </div>
+                
+                {overview ? (
+                  <div className="space-y-4">
+                    {Object.entries(overview.scores).map(([skill, score]) => (
+                      <div key={skill} className="group cursor-default">
+                        <div className="flex justify-between items-end mb-1 transition-colors group-hover:text-blue-300">
+                          <span className="text-sm font-semibold text-slate-200">{skill}</span>
+                          <span className="text-sm font-mono text-blue-400 font-medium">{score}점</span>
+                        </div>
+                        <div className="w-full bg-slate-800/80 rounded-full h-3 shadow-inner overflow-hidden border border-slate-700/50">
+                          <div
+                            className="bg-gradient-to-r from-blue-600 to-cyan-400 h-full rounded-full transition-all duration-1000 group-hover:from-blue-500 group-hover:to-cyan-300"
+                            style={{ width: `${Math.min(score, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="animate-pulse flex space-y-4 flex-col opacity-50">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} className="h-4 bg-slate-800 rounded w-full"></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Card 3: Applicants count per job */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl shadow-indigo-900/10">
+                <div className="flex items-center gap-2 mb-4 border-b border-slate-800 pb-3">
+                  <span className="text-xl">🔥</span>
+                  <h3 className="text-xl font-bold text-white tracking-wide">공고별 누적 면접 건수</h3>
+                </div>
+                
+                {overview && overview.jobs.length > 0 ? (
+                  <div className="flex flex-col gap-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+                    {overview.jobs.map((job, idx) => (
+                      <div key={idx} className="flex justify-between items-center bg-slate-800/50 p-3 rounded-xl hover:bg-slate-800 transition">
+                        <span className="text-sm text-slate-200 truncate pr-4">{job.title}</span>
+                        <span className="text-xs font-bold text-white bg-indigo-500/80 px-2 py-1 rounded shadow-inner whitespace-nowrap">
+                          {job.count}명
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : overview ? (
+                  <p className="text-sm text-slate-500 text-center py-4">등록된 공고가 없습니다.</p>
+                ) : (
+                  <div className="animate-pulse space-y-3 opacity-50">
+                     <div className="h-10 bg-slate-800 rounded-xl w-full"></div>
+                     <div className="h-10 bg-slate-800 rounded-xl w-full"></div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
