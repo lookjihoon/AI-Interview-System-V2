@@ -1,219 +1,153 @@
-# Quick Start Guide
+<div align="center">
+  <h1>🎙️ AI 모의면접 시스템 V2 (AI Interview System V2)</h1>
+  <p><strong>초개인화 RAG 질문 생성과 비언어적 멀티모달 프레임워크가 결합된 차세대 압박 면접 시뮬레이터</strong></p>
 
-## Backend Setup
+  <p align="center">
+    <img src="https://img.shields.io/badge/Python-3.10+-blue.svg?logo=python&logoColor=white" alt="Python" />
+    <img src="https://img.shields.io/badge/React-18.2-blue?logo=react&logoColor=white" alt="React" />
+    <img src="https://img.shields.io/badge/FastAPI-0.100+-009688.svg?logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/PostgreSQL-%2B%20pgvector-336791.svg?logo=postgresql&logoColor=white" alt="PostgreSQL" />
+    <br/>
+    <img src="https://img.shields.io/badge/LLM-Exaone%203.5-black.svg?logo=ollama&logoColor=white" alt="LLM" />
+    <img src="https://img.shields.io/badge/TailwindCSS-3.3-38B2AC.svg?logo=tailwind-css&logoColor=white" alt="Tailwind" />
+  </p>
+</div>
 
-### 1. Start the Backend Server
+---
 
+## 📖 1. 프로젝트 개요 및 핵심 기능 (About the Project)
+
+**AI 모의면접 시스템 V2**는 구직자가 실제 기업의 면접 환경과 동일한 압박감을 경험하며 실전 감각을 키울 수 있도록 설계된 풀스택 면접 시뮬레이션 플랫폼입니다. 사용자의 이력서와 직무 기술서를 분석하여 지능적으로 꼬리 질문을 던집니다.
+
+* **🎯 초개인화 RAG 기반 꼬리 질문**: `all-mpnet-base-v2` 임베딩과 `pgvector`를 활용하여 단순히 정해진 질문을 묻는 것이 아니라, 지원자의 답변 내용과 JD를 매핑하여 가장 날카로운 후속 질문을 동적으로 검색 및 생성합니다.
+* **👁️ 멀티모달 (언어 + 비언어) 평가**: 텍스트(답변의 논리성 및 STAR 기법 준수 여부)뿐만 아니라, Vision 모델을 통해 웹캠 프레임의 표정(긴장도, 표정 변화)을 초 단위로 분석하여 비언어적 태도 점수까지 종합적으로 산출합니다.
+* **🔒 100% 로컬 보안 환경 (On-Premise Ready)**: 민감한 개인정보(이력서 등)가 외부 클라우드 LLM으로 유출되는 것을 막기 위해 `Ollama (exaone 3.5)` 기반의 로컬 인퍼런스를 완벽히 지원합니다.
+
+---
+
+## 🛠️ 2. 기술 스택 (Tech Stack)
+
+| 계층 (Layer) | 주요 기술 및 라이브러리 |
+| :--- | :--- |
+| **Frontend** | React 18, Vite, Tailwind CSS, Zustand, Recharts (데이터 시각화), React Router |
+| **Backend** | Python 3.10+, FastAPI, SQLAlchemy, Alembic |
+| **Database** | PostgreSQL, `pgvector` (Vector DB), Redis (세션/캐시용) |
+| **AI / ML** | Ollama (`exaone 3.5`), HuggingFace (`all-mpnet-base-v2`), LangChain, DeepFace / OpenCV (비전) |
+| **Audio / RTC** | Deepgram (STT), Hume AI (TTS), WebRTC (`aiortc`), WebSockets |
+
+---
+
+## 📂 3. 디렉토리 구조 (Directory Structure)
+
+```text
+AI_Interview_System_V2/
+├── frontend/                # React 기반 프론트엔드 프로젝트
+│   ├── src/
+│   │   ├── components/      # UI 컴포넌트 (ChatRoom, MyPage, AdminDashboard 등)
+│   │   ├── api/             # Axios 기반 API 통신 모듈
+│   │   ├── App.jsx          # React Router 라우팅 설정
+│   │   └── index.css        # Tailwind 글로벌 스타일시트
+│   ├── package.json         # 프론트엔드 의존성 파일
+│   └── vite.config.js       # Vite 빌드 설정
+│
+└── backend/                 # FastAPI 기반 백엔드 프로젝트
+    ├── app/
+    │   ├── routers/         # API 엔드포인트 분리 (admin.py, candidate.py, interview.py)
+    │   └── services/        # 비즈니스 로직 (ai_service.py - 핵심 RAG/채점 로직)
+    ├── models.py            # SQLAlchemy ORM 데이터베이스 스키마
+    ├── schemas.py           # Pydantic 기반 요청/응답 검증 모델
+    ├── database.py          # DB 커넥션 및 세션 관리
+    ├── main.py              # FastAPI 진입점 및 미들웨어 (CORS, 정적 파일 마운트)
+    ├── .env                 # 환경 변수 (GitHub 제외)
+    └── requirements.txt     # 백엔드 의존성 패키지 명세
+```
+
+---
+
+## 💻 4. 사전 요구사항 (Prerequisites)
+
+이 프로젝트의 AI 모델(로컬 추론) 및 고성능 연산을 로컬에서 실행하기 위한 권장 사항입니다.
+
+* **하드웨어 (Hardware)**: 
+  * 로컬 LLM 구동을 위한 VRAM이 확보된 GPU 권장 (예: NVIDIA GTX 1660 SUPER 이상 / 6GB VRAM 이상)
+  * RAM 16GB 이상 권장
+* **소프트웨어 (Software)**:
+  * **Python**: `3.10` 이상
+  * **Node.js**: `v18` 이상 (또는 v20 권장)
+  * **Database**: PostgreSQL 15+ 및 **`pgvector` Extension** 설치 필수
+  * **로컬 LLM 서버**: [Ollama](https://ollama.ai/) 설치
+
+---
+
+## 🚀 5. 설치 및 실행 가이드 (Getting Started)
+
+### 5.1 로컬 LLM (Ollama) 및 Redis 서버 구동
+백그라운드 포트에서 로컬 모델들을 띄워둡니다.
+```bash
+# Ollama 백그라운드 실행 및 Exaone 3.5 모델 서빙
+ollama run exaone3.5
+
+# Redis 서버 구동 (Windows의 경우 WSL 또는 포터블 Redis 활용)
+redis-server
+```
+
+### 5.2 Database 셋업 및 pgvector 활성화
+PostgreSQL 데이터베이스 생성 후, RAG를 위한 벡터 확장을 반드시 등록해야 합니다.
+```sql
+CREATE DATABASE interview_db;
+\c interview_db;
+CREATE EXTENSION IF NOT EXISTS vector;
+```
+
+### 5.3 Backend 패키지 설치 및 실행
 ```bash
 cd backend
-python main.py
+
+# 가상 환경 생성 및 진입
+python -m venv venv
+# Windows: venv\Scripts\activate
+# Mac/Linux: source venv/bin/activate
+
+# 의존성 모듈 설치 (PyTorch 등 OS 별도 설치 권장)
+pip install -r requirements.txt
+
+# DB 마이그레이션 적용 및 QnA 뱅크 레코드 시딩 로드
+# (초기 세팅 스크립트 실행)
+
+# FastAPI 서버 실행 (http://localhost:8000)
+uvicorn main:app --reload
 ```
 
-Expected output:
-```
-Creating database tables...
-Database tables created successfully!
-INFO:     Started server process [xxxx]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
-```
-
-### 2. Test Health Endpoint
-
-Open browser or use curl:
-```bash
-curl http://localhost:8000/api/health
-```
-
-Expected response:
-```json
-{
-  "status": "ok",
-  "db": "connected",
-  "gpu": true,
-  "gpu_count": 1,
-  "gpu_name": "NVIDIA GeForce GTX 1660 SUPER"
-}
-```
-
-## Frontend Setup
-
-### 1. Install Dependencies
-
+### 5.4 Frontend 패키지 설치 및 실행
+새로운 터미널 창을 열고 프론트엔드를 실행합니다.
 ```bash
 cd frontend
+
+# NPM 패키지 설치
 npm install
-```
 
-### 2. Start Development Server
-
-```bash
+# Vite 개발 서버 실행 (http://localhost:5173)
 npm run dev
 ```
 
-Expected output:
-```
-VITE v5.0.8  ready in xxx ms
-
-➜  Local:   http://localhost:5173/
-➜  Network: use --host to expose
-```
-
-### 3. Open in Browser
-
-Navigate to `http://localhost:5173` and click "Check System Health" button.
-
-## Database Verification
-
-### Check Tables in PostgreSQL
-
-```bash
-psql -U postgres -d interview_db -c "\dt"
-```
-
-Expected tables:
-- users
-- job_postings
-- interview_sessions
-- transcripts
-- evaluation_reports
-- question_bank
-
-## Troubleshooting
-
-### Backend Issues
-
-**Problem**: `POSTGRES_CONNECTION_STRING not found`
-- **Solution**: Ensure `.env` file exists in `/backend` directory
-
-**Problem**: Database connection error
-- **Solution**: Verify PostgreSQL is running and credentials in `.env` are correct
-
-### Frontend Issues
-
-**Problem**: CORS error
-- **Solution**: Ensure backend is running on port 8000 and frontend on port 5173
-
-**Problem**: `npm install` fails
-- **Solution**: Ensure Node.js version is 18+ (`node --version`)
-
-
 ---
 
+## 🔐 6. 환경 변수 설정 (Environment Variables)
 
-기존 `README.md` 파일을 확인해 보니, 실행 방법과 트러블슈팅(오류 해결) 방법이 아주 꼼꼼하게 잘 적혀있는 **"개발자용 가이드"** 형태입니다!
+`backend/.env` 파일을 만들고 아래의 형식에 맞춰 할당받은 API 키와 DB 주소를 입력합니다. (보안상의 이유로 실제 값은 Git에 커밋하지 않습니다.)
 
-기존 내용을 무조건 덮어씌우기보다는, **제가 제안해 드린 "포트폴리오용 소개글"과 기존의 "실행 및 오류 해결 가이드"를 하나로 합치는 것(Merge)이 가장 완벽합니다.** 이렇게 합치면 이력서를 검토하는 면접관은 "아, 이런 멋진 기능이 있구나" 하고 한눈에 파악할 수 있고, 다른 개발자는 "이렇게 실행하고 오류를 고치면 되는구나" 하고 감탄하게 될 것입니다.
+```env
+# --- AI 연결 키 ---
+# RAG 컨텍스트 추출 시 보조 모델 생성을 위한 OpenAI 키 (필요 시)
+OPENAI_API_KEY=sk-proj-...
+# 실시간 음성 인식을 위한 Deepgram API 키
+DEEPGRAM_API_KEY=your_deepgram_api_key...
+# 로컬 임베딩(all-mpnet-base-v2 등) 모델 다운로드에 필요한 HF 토큰
+HUGGING_FACE_TOKEN=hf_...
 
-두 가지 장점을 모두 살린 **최종 통합본 README**를 만들어 드립니다. 기존 `README.md`의 내용을 모두 지우고, 아래 내용으로 **전부 덮어씌워주세요!**
-
----
-
-### 📝 덮어씌울 최종 README.md 내용
-
-```markdown
-# 🧠 AI Mock Interview System (V2)
-
-**"나만의 깐깐한 AI 기술 면접관"** - RAG 기반 심층 기술 면접 및 LLM 피드백 시스템
-
-## 📌 프로젝트 소개
-단순히 정해진 질문을 던지는 챗봇이 아닙니다. 지원자의 **이력서와 채용 공고(JD)를 분석**하여, **6,000+개의 기술 질문 데이터베이스**에서 최적의 질문을 찾아내고(RAG), 지원자의 답변을 실시간으로 평가하여 **점수와 꼬리 질문**을 제공하는 지능형 모의 면접 플랫폼입니다.
-
-## ✨ 핵심 기능
-- **맞춤형 면접 설계:** 지원자 이력 및 직무 요구사항 기반 질문 RAG 검색
-- **실시간 평가 & 피드백:** 답변 즉시 점수(0~100) 산정 및 개선 피드백 제공
-- **꼬리물기(Follow-up) 질문:** 지원자의 답변 수준에 맞춘 심층 기술 검증
-- **모던한 UI/UX:** 실시간 타이핑 인디케이터, 마크다운 코드 하이라이팅, 부드러운 채팅 애니메이션
-
-## 🛠 기술 스택 (Tech Stack)
-- **Backend:** Python, FastAPI, SQLAlchemy, PostgreSQL (pgvector)
-- **AI/ML:** LangChain, HuggingFace Embeddings, Ollama (Llama 3.1)
-- **Frontend:** React, Vite, Tailwind CSS, React-Router, React-Markdown
-
----
-
-## 🚀 Quick Start Guide (실행 방법)
-
-### 1. AI Model (Ollama) 실행
-```bash
-# 별도의 터미널에서 실행해 둡니다.
-ollama run llama3.1
-
-```
-
-### 2. Backend 서버 실행
-
-```bash
-cd backend
-venv\Scripts\activate  # 가상환경 활성화 (Windows)
-python main.py
-
-```
-
-*정상 실행 시 `Uvicorn running on http://0.0.0.0:8000` 메시지가 출력됩니다.*
-*Health Check: `curl http://localhost:8000/api/health*`
-
-### 3. Frontend 화면 실행
-
-```bash
-cd frontend
-npm install  # 최초 1회만 실행
-npm run dev
-
-```
-
-*실행 후 브라우저에서 `http://localhost:5173` 으로 접속합니다.*
-
----
-
-## 🗄️ Database Verification (DB 확인)
-
-PostgreSQL에 접속하여 다음 테이블들이 정상적으로 생성되었는지 확인합니다.
-
-```bash
-psql -U postgres -d interview_db -c "\dt"
-
-```
-
-* **Expected tables:** `users`, `job_postings`, `interview_sessions`, `transcripts`, `evaluation_reports`, `question_bank`
-
----
-
-## 🚑 Troubleshooting (자주 발생하는 문제 해결)
-
-### Backend Issues
-
-* **`POSTGRES_CONNECTION_STRING not found`**
-* **해결:** `backend` 폴더 내에 `.env` 파일이 존재하는지 확인하세요.
-
-
-* **Database connection error**
-* **해결:** PostgreSQL 서비스가 실행 중인지, `.env` 파일의 비밀번호 등 접속 정보가 맞는지 확인하세요.
-
-
-
-### Frontend Issues
-
-* **CORS error (서버 연결 실패)**
-* **해결:** 백엔드가 `8000` 포트, 프론트엔드가 `5173` 포트에서 실행 중인지 확인하세요.
-
-
-* **`npm install` fails**
-* **해결:** Node.js 버전이 18 이상인지 확인하세요. (`node --version`)
-
-
-
----
-
-## 📸 스크린샷 (Screenshots)
-
-*(여기에 방금 캡처하신 멋진 면접 진행 화면 이미지들을 폴더에 넣고 경로를 연결해 주시면 더욱 좋습니다!)*
-
-```
-
----
-
-이제 이것을 붙여넣고 마지막으로 깃허브에 Push (`git add .`, `git commit -m "docs: Update README"`, `git push`) 하시면, 김개발님의 깃허브 메인 페이지가 정말 전문적이고 멋진 포트폴리오로 바뀔 것입니다! 🚀 끝까지 완벽하시네요!
-
+# --- Database 연결 주소 ---
+# 세션 및 Async Job 큐잉용
+REDIS_URL=redis://localhost:6379/0
+# 메인 RDBMS 주소 (반드시 pgvector 지원 버전일 것)
+POSTGRES_CONNECTION_STRING=postgresql+psycopg2://[계정명]:[비밀번호]@127.0.0.1:5432/interview_db
 ```
